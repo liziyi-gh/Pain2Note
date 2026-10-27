@@ -1,0 +1,149 @@
+Poker Hand #RCDEMO001: Hold'em No Limit ($0.50/$1) - 2026/10/20 20:00:00
+Table 'RushAndCashSample' 6-max Seat #6 is the button
+Seat 1: SmallBlind ($100 in chips)
+Seat 2: BigBlind ($100 in chips)
+Seat 3: Hero ($100 in chips)
+Seat 4: PlayerFour ($100 in chips)
+Seat 5: PlayerFive ($100 in chips)
+Seat 6: Button ($100 in chips)
+SmallBlind: posts small blind $0.50
+BigBlind: posts big blind $1
+*** HOLE CARDS ***
+Dealt to Hero [As Ah]
+Hero: raises $2 to $3
+PlayerFour: folds
+PlayerFive: folds
+Button: folds
+SmallBlind: folds
+BigBlind: raises $97 to $100 and is all-in
+Hero: calls $97 and is all-in
+Hero: shows [As Ah]
+BigBlind: shows [Kd Kc]
+*** FLOP *** [2c 7d 9h]
+*** TURN *** [2c 7d 9h] [Ks]
+*** RIVER *** [2c 7d 9h Ks] [3c]
+*** SHOWDOWN ***
+BigBlind collected $197.50 from pot
+*** SUMMARY ***
+Total pot $200.50 | Rake $3 | Jackpot $0 | Bingo $0 | Fortune $0 | Tax $0
+Board [2c 7d 9h Ks 3c]
+Seat 2: BigBlind (big blind) showed [Kd Kc] and won ($197.50)
+Seat 3: Hero showed [As Ah] and lost
+
+Poker Hand #RCDEMO002: Hold'em No Limit ($0.50/$1) - 2026/10/20 20:01:00
+Table 'RushAndCashSample' 6-max Seat #3 is the button
+Seat 1: PlayerOne ($100 in chips)
+Seat 2: PlayerTwo ($100 in chips)
+Seat 3: Hero ($100 in chips)
+Seat 4: SmallBlind ($100 in chips)
+Seat 5: BigBlind ($100 in chips)
+Seat 6: PlayerSix ($100 in chips)
+SmallBlind: posts small blind $0.50
+BigBlind: posts big blind $1
+*** HOLE CARDS ***
+Dealt to Hero [Kh Qh]
+PlayerSix: folds
+PlayerOne: folds
+PlayerTwo: folds
+Hero: raises $2 to $3
+SmallBlind: folds
+BigBlind: calls $2
+*** FLOP *** [Ks 8d 2h]
+BigBlind: checks
+Hero: bets $4
+BigBlind: folds
+Uncalled bet ($4) returned to Hero
+Hero collected $6.20 from pot
+*** SUMMARY ***
+Total pot $6.50 | Rake $0.30 | Jackpot $0 | Bingo $0
+Board [Ks 8d 2h]
+Seat 3: Hero (button) collected ($6.20)
+
+Poker Hand #HDDEMO003: Hold'em No Limit ($0.50/$1) - 2026/10/20 20:02:00
+Table 'NLHSample' 6-max Seat #6 is the button
+Seat 1: Hero ($100 in chips)
+Seat 2: BigBlind ($100 in chips)
+Seat 3: PlayerThree ($100 in chips)
+Seat 4: PlayerFour ($100 in chips)
+Seat 5: PlayerFive ($100 in chips)
+Seat 6: Button ($100 in chips)
+Hero: posts small blind $0.50
+BigBlind: posts big blind $1
+*** HOLE CARDS ***
+Dealt to Hero [7c 2d]
+PlayerThree: raises $2 to $3
+PlayerFour: folds
+PlayerFive: folds
+Button: folds
+Hero: folds
+BigBlind: folds
+Uncalled bet ($2) returned to PlayerThree
+PlayerThree collected $2.50 from pot
+*** SUMMARY ***
+Total pot $2.50 | Rake $0 | Jackpot $0 | Bingo $0
+Seat 1: Hero (small blind) folded before Flop
+
+Poker Hand #RCDEMO004: Hold'em No Limit ($0.50/$1) - 2026/10/20 20:03:00
+Table 'RushAndCashSample' 6-max Seat #6 is the button
+Seat 1: SmallBlind ($100 in chips)
+Seat 2: BigBlind ($40 in chips)
+Seat 3: Hero ($100 in chips)
+Seat 4: PlayerFour ($100 in chips)
+Seat 5: PlayerFive ($100 in chips)
+Seat 6: Button ($100 in chips)
+SmallBlind: posts small blind $0.50
+BigBlind: posts big blind $1
+*** HOLE CARDS ***
+Dealt to Hero [Ac Kc]
+Hero: raises $2 to $3
+PlayerFour: folds
+PlayerFive: folds
+Button: folds
+SmallBlind: folds
+BigBlind: calls $2
+*** FLOP *** [Qc Jc 2h]
+BigBlind: bets $37 and is all-in
+Hero: calls $37
+Hero: shows [Ac Kc]
+BigBlind: shows [Qd Qh]
+*** TURN *** [Qc Jc 2h] [Tc]
+*** RIVER *** [Qc Jc 2h Tc] [5s]
+*** SHOWDOWN ***
+Hero collected $78.50 from pot
+*** SUMMARY ***
+Total pot $80.50 | Rake $2 | Jackpot $0 | Bingo $0 | Fortune $0 | Tax $0
+Board [Qc Jc 2h Tc 5s]
+Seat 2: BigBlind (big blind) showed [Qd Qh] and lost
+Seat 3: Hero showed [Ac Kc] and won ($78.50)
+
+Poker Hand #RCDEMO005: Hold'em No Limit ($0.50/$1) - 2026/10/20 20:04:00
+Table 'RushAndCashSample' 6-max Seat #6 is the button
+Seat 1: SmallBlind ($100 in chips)
+Seat 2: BigBlind ($100 in chips)
+Seat 3: Hero ($100 in chips)
+Seat 4: PlayerFour ($100 in chips)
+Seat 5: PlayerFive ($100 in chips)
+Seat 6: Button ($100 in chips)
+SmallBlind: posts small blind $0.50
+BigBlind: posts big blind $1
+*** HOLE CARDS ***
+Dealt to Hero [Ac Ad]
+Hero: raises $2 to $3
+PlayerFour: folds
+PlayerFive: folds
+Button: folds
+SmallBlind: folds
+BigBlind: raises $97 to $100 and is all-in
+Hero: calls $97 and is all-in
+Hero: shows [Ac Ad]
+BigBlind: shows [Kh Ks]
+*** FLOP *** [2h 7s 9d]
+*** TURN *** [2h 7s 9d] [3h]
+*** RIVER *** [2h 7s 9d 3h] [5s]
+*** SHOWDOWN ***
+Hero collected $197.50 from pot
+*** SUMMARY ***
+Total pot $200.50 | Rake $3 | Jackpot $0 | Bingo $0 | Fortune $0 | Tax $0
+Board [2h 7s 9d 3h 5s]
+Seat 2: BigBlind (big blind) showed [Kh Ks] and lost
+Seat 3: Hero showed [Ac Ad] and won ($197.50)
