@@ -13,3 +13,4 @@ src-tauri/gen/
 artifacts/
 test-results/
 playwright-report/
+ggpk/
