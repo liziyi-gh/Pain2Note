@@ -120,7 +120,7 @@ pub fn lookup(
         return Err("权益引擎返回了无效结果".into());
     }
     conn.execute(
-        "INSERT INTO equity_cache(key,equity,method,boards) VALUES (?1,?2,?3,?4)",
+        "INSERT INTO equity_cache(key,equity,method,boards) VALUES (?1,?2,?3,?4) ON CONFLICT(key) DO NOTHING",
         params![key, equity, ENGINE, boards as i64],
     )
     .map_err(|e| e.to_string())?;

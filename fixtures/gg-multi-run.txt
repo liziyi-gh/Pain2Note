@@ -1,0 +1,35 @@
+Poker Hand #MULTITURN: Hold'em No Limit ($0.50/$1) - 2026/10/20 20:05:00
+Table 'SyntheticRunItTwice' 6-max Seat #1 is the button
+Seat 1: Hero ($5 in chips)
+Seat 2: Villain ($10 in chips)
+Seat 3: Third ($10 in chips)
+Villain: posts small blind $0.50
+Third: posts big blind $1
+*** HOLE CARDS ***
+Dealt to Hero [As Ah]
+Hero: calls $1
+Villain: calls $0.50
+Third: checks
+*** FIRST FLOP *** [2c 7d 9h]
+Villain: checks
+Third: checks
+Hero: checks
+*** FIRST TURN *** [2c 7d 9h] [3s]
+Villain: bets $9 and is all-in
+Third: calls $9 and is all-in
+Hero: calls $4 and is all-in
+*** FIRST RIVER *** [2c 7d 9h 3s] [Ac]
+*** SECOND RIVER *** [2c 7d 9h 3s] [Qd]
+*** FIRST SHOWDOWN ***
+Hero collected $7.35 from main pot
+Villain collected $4.90 from side pot
+*** SECOND SHOWDOWN ***
+Third collected $12.25 from pot
+*** SUMMARY ***
+Total pot $25 | Rake $0.30 | Jackpot $0.20 | Bingo $0 | Fortune $0 | Tax $0
+Hand was run two times
+FIRST Board [2c 7d 9h 3s Ac]
+SECOND Board [Qd]
+Seat 1: Hero (button) showed [As Ah] and won ($7.35)
+Seat 2: Villain (small blind) showed [Ks Kh] and won ($4.90)
+Seat 3: Third (big blind) showed [Qs Qh] and won ($12.25)

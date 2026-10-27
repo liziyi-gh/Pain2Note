@@ -28,10 +28,18 @@ pub struct Hand {
     pub position: String,
     pub players: Vec<Player>,
     pub board: Vec<String>,
+    #[serde(default)]
+    pub boards: Vec<Vec<String>>,
     pub net: i64,
     pub ev: Option<f64>,
     pub ev_note: String,
     pub rake: i64,
+    #[serde(default)]
+    pub other_fees: i64,
+    #[serde(default)]
+    pub cash_drop: i64,
+    #[serde(default)]
+    pub hero_rake: Option<i64>,
     pub vpip: bool,
     pub pfr: bool,
     pub showdown: bool,
@@ -41,6 +49,8 @@ pub struct Hand {
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ImportReport {
+    #[serde(default)]
+    pub workers: usize,
     pub files: usize,
     pub imported: usize,
     pub duplicates: usize,
@@ -90,7 +100,12 @@ pub struct Overview {
     pub vpip: f64,
     pub pfr: f64,
     pub showdown: f64,
-    pub rake: i64,
+    pub rake: Option<i64>,
+    pub other_fees: i64,
+    pub rake_known: usize,
+    pub rake_missing: usize,
+    pub known_rake: i64,
+    pub rake_bb100: Option<f64>,
     pub currency: String,
     pub currencies: Vec<String>,
     pub stakes: Vec<i64>,

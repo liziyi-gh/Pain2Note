@@ -11,6 +11,492 @@ fn connection() -> rusqlite::Connection {
     c
 }
 
+const MULTI: &str = include_str!("../../fixtures/gg-multi-run.txt");
+
+fn import_paths(
+    conn: &mut rusqlite::Connection,
+    paths: &[String],
+    hero: &str,
+    progress: impl Fn(&pain2note_lib::model::ImportReport),
+) -> Result<pain2note_lib::model::ImportReport, String> {
+    importer::import_paths_with_workers(
+        conn,
+        paths,
+        hero,
+        progress,
+        std::path::PathBuf::from(env!("CARGO_BIN_EXE_pain2note")),
+        2,
+    )
+}
+
+#[test]
+fn cash_drop_reconciles_platform_money_and_keeps_hero_rake_separate() {
+    let conn = connection();
+    let base = parser::parse(hand(1), "Hero", &conn).unwrap();
+    let raw = hand(1)
+        .replace(
+            "SmallBlind: posts",
+            "Cash Drop to Pot : total $1\nSmallBlind: posts",
+        )
+        .replace("$6.50", "$7.50")
+        .replace("$6.20", "$7.20");
+    let parsed = parser::parse(&raw, "Hero", &conn).unwrap();
+    assert_eq!(parsed.cash_drop, 100);
+    assert_eq!(parsed.net, 420);
+    assert_eq!(parsed.ev, Some(420.0));
+    assert_eq!(parsed.hero_rake, base.hero_rake);
+    assert_eq!(parsed.rake, base.rake);
+    assert_eq!(parsed.players.iter().map(|p| p.invested).sum::<i64>(), 650);
+    db::insert(&conn, &parsed).unwrap();
+    assert_eq!(db::detail(&conn, &parsed.id).unwrap().cash_drop, 100);
+    for broken in [
+        raw.replace("total $1", "total $0"),
+        raw.replace("total $1", "total $2"),
+        raw.replace("total $1", "unknown $1"),
+        raw.replace(
+            "Cash Drop to Pot : total $1",
+            "Cash Drop to Pot : total $1\nCash Drop to Pot : total $1",
+        ),
+        raw.replace("Cash Drop to Pot : total $1\n", "").replace(
+            "*** HOLE CARDS ***",
+            "*** HOLE CARDS ***\nCash Drop to Pot : total $1",
+        ),
+    ] {
+        assert!(parser::parse(&broken, "Hero", &conn).is_err());
+    }
+    let folded = hand(2)
+        .replace("Hero: posts", "Cash Drop to Pot : total $1\nHero: posts")
+        .replace("$2.50", "$3.50");
+    let parsed = parser::parse(&folded, "Hero", &conn).unwrap();
+    assert_eq!(parsed.net, -50);
+    assert_eq!(parsed.ev, Some(-50.0));
+    let partial_reveal =
+        folded.to_owned() + "\nSeat 3: PlayerThree showed [Ah] and collected ($3.50)";
+    assert_eq!(
+        parser::parse(&partial_reveal, "Hero", &conn).unwrap().net,
+        -50
+    );
+    let unknown = MULTI.replace("showed [Qs Qh]", "showed [Qs]");
+    assert!(parser::parse(&unknown, "Hero", &conn).unwrap().ev.is_none());
+}
+
+#[test]
+fn cash_drop_increases_preflop_and_multi_runout_main_pot_ev() {
+    let conn = connection();
+    let base = parser::parse(hand(0), "Hero", &conn).unwrap();
+    let raw = hand(0)
+        .replace(
+            "SmallBlind: posts",
+            "Cash Drop to Pot : total $1\nSmallBlind: posts",
+        )
+        .replace("$200.50", "$201.50")
+        .replace("$197.50", "$198.50");
+    let parsed = parser::parse(&raw, "Hero", &conn).unwrap();
+    let expected = (base.ev.unwrap() + 10000.0) * 19850.0 / 19750.0 - 10000.0;
+    assert!((parsed.ev.unwrap() - expected).abs() < 1e-7);
+    assert_eq!(parsed.net, base.net);
+    assert_eq!(parsed.hero_rake, base.hero_rake);
+
+    let base = parser::parse(MULTI, "Hero", &conn).unwrap();
+    let raw = MULTI
+        .replace(
+            "Villain: posts",
+            "Cash Drop to Pot : total $1\nVillain: posts",
+        )
+        .replace("Total pot $25", "Total pot $26")
+        .replace("$7.35", "$7.85")
+        .replace("$12.25", "$12.75");
+    let parsed = parser::parse(&raw, "Hero", &conn).unwrap();
+    let expected = (base.ev.unwrap() + 500.0) * (1600.0 * 2550.0 / 2600.0)
+        / (1500.0 * 2450.0 / 2500.0)
+        - 500.0;
+    assert!((parsed.ev.unwrap() - expected).abs() < 1e-7);
+    assert_eq!(parsed.net, 285);
+    assert_eq!(parsed.boards.len(), 2);
+    assert_eq!(parsed.hero_rake, None);
+}
+
+#[test]
+fn parallel_workers_share_equity_cache_and_retry_invalid_duplicate_ids() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("parallel.txt");
+    // Two processes encounter the same uncached equity key concurrently.
+    let second = hand(0).replace("RCDEMO001", "PARALLEL_SECOND");
+    let broken = hand(1).replace("Total pot $6.50", "Total pot $7.50");
+    std::fs::write(
+        &path,
+        [hand(0), &second, &broken, hand(1), hand(1)].join("\n\n"),
+    )
+    .unwrap();
+    let mut conn = connection();
+    let report = import_paths(&mut conn, &[path.to_string_lossy().into()], "Hero", |_| {}).unwrap();
+    assert_eq!(report.workers, 2);
+    assert_eq!(report.imported, 3, "{:?}", report.issues);
+    assert_eq!(report.duplicates, 1);
+    assert_eq!(report.rejected, 1);
+    let count: i64 = conn
+        .query_row("SELECT count(*) FROM equity_cache", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(count, 1);
+    assert_eq!(
+        db::detail(&conn, "RCDEMO001").unwrap().ev,
+        db::detail(&conn, "PARALLEL_SECOND").unwrap().ev
+    );
+    let history = db::history(&conn).unwrap();
+    assert_eq!(history[0]["report"]["workers"], 2);
+}
+
+#[test]
+fn worker_or_database_failure_rolls_back_the_entire_batch() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("hands.txt");
+    std::fs::write(&path, SAMPLE).unwrap();
+    let paths = [path.to_string_lossy().into_owned()];
+    let mut conn = connection();
+    let result = importer::import_paths_with_workers(
+        &mut conn,
+        &paths,
+        "Hero",
+        |_| {},
+        dir.path().join("missing-worker"),
+        2,
+    );
+    assert!(result.unwrap_err().contains("无法启动导入子进程"));
+    assert_eq!(db::overview(&conn, Filter::default()).unwrap().hands, 0);
+    assert!(db::history(&conn).unwrap().is_empty());
+    conn.execute_batch("CREATE TRIGGER fail_hand BEFORE INSERT ON hands WHEN NEW.id='HDDEMO003' BEGIN SELECT RAISE(ABORT, 'test write failure'); END;").unwrap();
+    let result = import_paths(&mut conn, &paths, "Hero", |_| {});
+    assert!(result.unwrap_err().contains("test write failure"));
+    assert_eq!(db::overview(&conn, Filter::default()).unwrap().hands, 0);
+    assert!(db::history(&conn).unwrap().is_empty());
+    let count: i64 = conn
+        .query_row("SELECT count(*) FROM equity_cache", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(count, 0);
+}
+
+#[test]
+fn multiple_runouts_keep_shared_cards_side_pots_and_one_all_in_ev() {
+    let conn = connection();
+    let multi = parser::parse(MULTI, "Hero", &conn).unwrap();
+    assert_eq!(multi.boards.len(), 2);
+    assert_eq!(multi.board, multi.boards[0]);
+    assert_eq!(&multi.boards[0][..4], &multi.boards[1][..4]);
+    assert_eq!(multi.net, 235);
+    assert_eq!(multi.rake, 30);
+    assert_eq!(multi.other_fees, 20);
+    assert_eq!(multi.hero_rake, None);
+    assert!(multi.showdown && multi.ev.is_some());
+    let single = MULTI
+        .replace("FIRST ", "")
+        .replace("Hand was run two times", "")
+        .replace("*** SECOND RIVER *** [2c 7d 9h 3s] [Qd]\n", "")
+        .replace("*** SECOND SHOWDOWN ***\n", "");
+    assert_eq!(parser::parse(&single, "Hero", &conn).unwrap().ev, multi.ev);
+    let summary_only = MULTI
+        .lines()
+        .filter(|l| !l.contains(" collected "))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_eq!(
+        parser::parse(&summary_only, "Hero", &conn).unwrap().net,
+        multi.net
+    );
+    assert!(db::insert(&conn, &multi).unwrap());
+    assert_eq!(db::detail(&conn, &multi.id).unwrap().boards, multi.boards);
+}
+
+#[test]
+fn preflop_twice_and_flop_three_times_sum_payouts_without_multiplying_ev() {
+    let conn = connection();
+    let single = parser::parse(hand(0), "Hero", &conn).unwrap();
+    let twice = hand(0).replace("*** FLOP", "*** FIRST FLOP")
+        .replace("*** TURN", "*** FIRST TURN").replace("*** RIVER", "*** FIRST RIVER")
+        .replace("*** SHOWDOWN ***", "*** SECOND FLOP *** [4c 5d 6h]\n*** SECOND TURN *** [4c 5d 6h] [8s]\n*** SECOND RIVER *** [4c 5d 6h 8s] [Th]\n*** FIRST SHOWDOWN ***")
+        .replace("BigBlind collected $197.50 from pot", "BigBlind collected $98.75 from pot\n*** SECOND SHOWDOWN ***\nHero collected $98.75 from pot");
+    let parsed = parser::parse(&twice, "Hero", &conn).unwrap();
+    assert_eq!(parsed.boards.len(), 2);
+    assert_eq!(parsed.net, -125);
+    assert_eq!(parsed.ev, single.ev);
+    let three = MULTI.replace("MULTITURN", "MULTIFLOP")
+        .replace("Hand was run two times", "Hand was run three times")
+        .replace("*** FIRST TURN *** [2c 7d 9h] [3s]\n", "")
+        .replace("*** FIRST RIVER", "*** FIRST TURN *** [2c 7d 9h] [3s]\n*** FIRST RIVER")
+        .replace("*** SECOND RIVER *** [2c 7d 9h 3s] [Qd]", "*** SECOND TURN *** [2c 7d 9h] [4s]\n*** SECOND RIVER *** [2c 7d 9h 4s] [Qd]\n*** THIRD TURN *** [2c 7d 9h] [5s]\n*** THIRD RIVER *** [2c 7d 9h 5s] [6d]")
+        .replace("Hero collected $7.35 from main pot", "Hero collected $4.90 from main pot")
+        .replace("Villain collected $4.90 from side pot", "Villain collected $3.27 from side pot")
+        .replace("Third collected $12.25 from pot", "Third collected $8.16 from pot\n*** THIRD SHOWDOWN ***\nHero collected $4.90 from main pot\nVillain collected $3.27 from side pot")
+        .replace("Seat 1: Hero (button) showed [As Ah] and won ($7.35)", "Seat 1: Hero (button) showed [As Ah] and won ($4.90), and won ($4.90)")
+        .replace("Seat 2: Villain (small blind) showed [Ks Kh] and won ($4.90)", "Seat 2: Villain (small blind) showed [Ks Kh] and won ($3.27), and won ($3.27)")
+        .replace("Seat 3: Third (big blind) showed [Qs Qh] and won ($12.25)", "Seat 3: Third (big blind) showed [Qs Qh] and won ($8.16)");
+    let parsed = parser::parse(&three, "Hero", &conn).unwrap();
+    assert_eq!(parsed.boards.len(), 3);
+    assert_eq!(&parsed.boards[0][..3], &parsed.boards[2][..3]);
+    assert_eq!(parsed.net, 480);
+    assert!(parsed.ev.is_some());
+    let summary_only = three
+        .lines()
+        .filter(|line| !line.contains(" collected "))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_eq!(
+        parser::parse(&summary_only, "Hero", &conn).unwrap().net,
+        480
+    );
+}
+
+#[test]
+fn malformed_multi_runouts_are_rejected_and_unknown_holes_keep_ev_missing() {
+    let conn = connection();
+    for broken in [
+        MULTI.replace("[Qd]", "[Ac]"),
+        MULTI.replace("[Qd]", "[As]"),
+        MULTI.replace("SECOND RIVER", "THIRD RIVER"),
+        MULTI.replace("*** SECOND RIVER *** [2c 7d 9h 3s] [Qd]", ""),
+        MULTI.replace("[2c 7d 9h 3s] [Qd]", "[2c 7d 9h 4s] [Qd]"),
+        MULTI.replace("*** SECOND RIVER", "Hero: bets $1\n*** SECOND RIVER"),
+    ] {
+        assert!(parser::parse(&broken, "Hero", &conn).is_err());
+    }
+    let unknown = MULTI.replace("showed [Qs Qh]", "mucked");
+    assert!(parser::parse(&unknown, "Hero", &conn).unwrap().ev.is_none());
+}
+
+#[test]
+fn rake_is_separate_from_other_fees_and_normalized_per_hand_blind() {
+    let conn = connection();
+    let folded = hand(1).replace(
+        "Dealt to Hero [Kh Qh]",
+        "Dealt to Hero [Kh Qh]\nDealt to PlayerOne [Ac Ad]",
+    );
+    let folded = parser::parse(&folded, "PlayerOne", &conn).unwrap();
+    assert_eq!(folded.rake, 30, "table rake includes opponents' pots");
+    assert_eq!(
+        folded.hero_rake,
+        Some(0),
+        "Hero paid nothing when folding without investing"
+    );
+    let a = parser::parse(
+        &MULTI.replace("Rake $0.30 | Jackpot $0.20", "Rake $0.50 | Jackpot $0"),
+        "Hero",
+        &conn,
+    )
+    .unwrap();
+    assert_eq!(a.hero_rake, Some(15));
+    db::insert(&conn, &a).unwrap();
+    let mut b = a.clone();
+    b.id = "ANOTHER_STAKE".into();
+    b.big_blind = 50;
+    db::insert(&conn, &b).unwrap();
+    let overview = db::overview(&conn, Filter::default()).unwrap();
+    assert_eq!(overview.rake, Some(30));
+    assert_eq!(overview.other_fees, 0);
+    assert_eq!(overview.rake_known, 2);
+    assert_eq!(overview.rake_missing, 0);
+    assert_eq!(overview.known_rake, 30);
+    assert!((overview.rake_bb100.unwrap() - 22.5).abs() < 1e-9);
+    let filtered = db::overview(
+        &conn,
+        Filter {
+            big_blind: Some(50),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(filtered.rake, Some(15));
+    assert_eq!(filtered.rake_bb100, Some(30.0));
+    let empty = db::overview(
+        &conn,
+        Filter {
+            search: Some("NONE".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(empty.rake, Some(0));
+    assert_eq!(empty.rake_bb100, Some(0.0));
+}
+
+#[test]
+fn version_one_migration_splits_fees_without_changing_results() {
+    let conn = connection();
+    let raw = hand(1).replace("Rake $0.30 | Jackpot $0", "Rake $0.20 | Jackpot $0.10");
+    let parsed = parser::parse(&raw, "Hero", &conn).unwrap();
+    db::insert(&conn, &parsed).unwrap();
+    let mut legacy = serde_json::to_value(&parsed).unwrap();
+    for field in ["boards", "otherFees", "heroRake"] {
+        legacy.as_object_mut().unwrap().remove(field);
+    }
+    legacy["rake"] = 30.into();
+    conn.execute("UPDATE hands SET rake=30,data=?1", [legacy.to_string()])
+        .unwrap();
+    conn.execute_batch("ALTER TABLE hands DROP COLUMN other_fees; ALTER TABLE hands DROP COLUMN hero_rake; PRAGMA user_version=1;").unwrap();
+    db::migrate(&conn).unwrap();
+    db::migrate(&conn).unwrap();
+    let result = db::detail(&conn, &parsed.id).unwrap();
+    assert_eq!(result.rake, 20);
+    assert_eq!(result.other_fees, 10);
+    assert_eq!(result.hero_rake, parsed.hero_rake);
+    assert_eq!(result.boards, vec![parsed.board]);
+    assert_eq!(result.net, parsed.net);
+    assert_eq!(result.ev, parsed.ev);
+    let overview = db::overview(&conn, Filter::default()).unwrap();
+    assert_eq!(overview.rake, Some(20));
+    assert_eq!(overview.other_fees, 10);
+}
+
+#[test]
+fn hero_rake_counts_won_pot_deductions_and_never_contributions() {
+    let conn = connection();
+    let loser = parser::parse(hand(0), "Hero", &conn).unwrap();
+    assert_eq!(loser.hero_rake, Some(0));
+    let winner = parser::parse(hand(1), "Hero", &conn).unwrap();
+    assert_eq!(winner.hero_rake, Some(30));
+    assert_eq!(
+        winner
+            .players
+            .iter()
+            .find(|p| p.name == "Hero")
+            .unwrap()
+            .invested,
+        300
+    );
+    db::insert(&conn, &loser).unwrap();
+    db::insert(&conn, &winner).unwrap();
+    let complete = db::overview(&conn, Filter::default()).unwrap();
+    assert_eq!(complete.rake, Some(30));
+    assert_eq!(complete.rake_bb100, Some(15.0));
+    assert_eq!(complete.known_rake, 30);
+    assert_eq!(complete.net, loser.net + winner.net);
+
+    let ambiguous = parser::parse(MULTI, "Hero", &conn).unwrap();
+    assert_eq!(
+        ambiguous.hero_rake, None,
+        "GG does not attribute Jackpot separately to each winner"
+    );
+    db::insert(&conn, &ambiguous).unwrap();
+    let incomplete = db::overview(&conn, Filter::default()).unwrap();
+    assert_eq!(incomplete.rake, None);
+    assert_eq!(incomplete.rake_bb100, None);
+    assert_eq!(incomplete.rake_known, 2);
+    assert_eq!(incomplete.rake_missing, 1);
+    assert_eq!(incomplete.known_rake, 30);
+    let filtered = db::overview(
+        &conn,
+        Filter {
+            search: Some(winner.id),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(filtered.rake, Some(30));
+    assert_eq!(filtered.rake_bb100, Some(30.0));
+}
+
+const TIED: &str = "Poker Hand #TIEDRAKE: Hold'em No Limit ($0.50/$1) - 2026/10/20 20:10:00
+Table 'SyntheticTie' 6-max Seat #1 is the button
+Seat 1: Hero ($10 in chips)
+Seat 2: Villain ($10 in chips)
+Hero: posts small blind $0.50
+Villain: posts big blind $1
+*** HOLE CARDS ***
+Dealt to Hero [As Ad]
+Hero: raises $9 to $10 and is all-in
+Villain: calls $9 and is all-in
+*** FLOP *** [2c 3d 4h]
+*** TURN *** [2c 3d 4h] [8s]
+*** RIVER *** [2c 3d 4h 8s] [9c]
+*** SHOWDOWN ***
+Hero collected $9.85 from pot
+Villain collected $9.85 from pot
+*** SUMMARY ***
+Total pot $20 | Rake $0.30 | Jackpot $0
+Seat 1: Hero showed [As Ad] and won ($9.85)
+Seat 2: Villain showed [Ac Ah] and won ($9.85)";
+
+#[test]
+fn split_pot_rake_is_exact_only_when_the_fee_and_odd_chips_are_determined() {
+    let conn = connection();
+    let tied = parser::parse(TIED, "Hero", &conn).unwrap();
+    assert_eq!(tied.hero_rake, Some(15));
+    assert_eq!(
+        tied.net, -15,
+        "rake can be paid while Hero loses money on a tie"
+    );
+    let jackpot = TIED.replace("Rake $0.30 | Jackpot $0", "Rake $0.20 | Jackpot $0.10");
+    assert_eq!(
+        parser::parse(&jackpot, "Hero", &conn).unwrap().hero_rake,
+        None
+    );
+    let unknown = TIED.replace("showed [Ac Ah]", "mucked");
+    assert_eq!(
+        parser::parse(&unknown, "Hero", &conn).unwrap().hero_rake,
+        None
+    );
+    let odd = TIED
+        .replace(
+            "Hero: posts small blind",
+            "Seat 3: Folder ($10 in chips)\nFolder: posts ante $0.01\nHero: posts small blind",
+        )
+        .replace("*** FLOP", "Folder: folds\n*** FLOP")
+        .replace("Hero collected $9.85", "Hero collected $9.86")
+        .replace("Total pot $20", "Total pot $20.01");
+    assert_eq!(parser::parse(&odd, "Hero", &conn).unwrap().hero_rake, None);
+    let no_rake = jackpot.replace("Rake $0.20 | Jackpot $0.10", "Rake $0 | Jackpot $0.30");
+    assert_eq!(
+        parser::parse(&no_rake, "Hero", &conn).unwrap().hero_rake,
+        Some(0)
+    );
+
+    let hero_all_fees = MULTI
+        .replace("Rake $0.30 | Jackpot $0.20", "Rake $0.10 | Jackpot $0.05")
+        .replace("$4.90", "$5")
+        .replace("$12.25", "$12.50");
+    assert_eq!(
+        parser::parse(&hero_all_fees, "Hero", &conn)
+            .unwrap()
+            .hero_rake,
+        Some(10)
+    );
+}
+
+#[test]
+fn version_two_migration_discards_estimates_and_preserves_multiple_boards() {
+    let conn = connection();
+    let winner = parser::parse(hand(1), "Hero", &conn).unwrap();
+    let multi = parser::parse(MULTI, "Hero", &conn).unwrap();
+    for hand in [&winner, &multi] {
+        db::insert(&conn, hand).unwrap();
+    }
+    conn.execute_batch("ALTER TABLE hands DROP COLUMN hero_rake; ALTER TABLE hands ADD COLUMN hero_rake REAL NOT NULL DEFAULT 0; PRAGMA user_version=2;").unwrap();
+    for hand in [&winner, &multi] {
+        let mut legacy = serde_json::to_value(hand).unwrap();
+        legacy["heroRake"] = 12.34.into();
+        conn.execute(
+            "UPDATE hands SET hero_rake=12.34,data=?1 WHERE id=?2",
+            rusqlite::params![legacy.to_string(), hand.id],
+        )
+        .unwrap();
+    }
+    db::migrate(&conn).unwrap();
+    db::migrate(&conn).unwrap();
+    assert_eq!(db::detail(&conn, &winner.id).unwrap().hero_rake, Some(30));
+    let migrated = db::detail(&conn, &multi.id).unwrap();
+    assert_eq!(migrated.hero_rake, None);
+    assert_eq!(migrated.boards, multi.boards);
+    assert_eq!(migrated.net, multi.net);
+    assert_eq!(migrated.ev, multi.ev);
+    let stored: Option<i64> = conn
+        .query_row(
+            "SELECT hero_rake FROM hands WHERE id=?1",
+            [&multi.id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(stored, None);
+    assert_eq!(db::overview(&conn, Filter::default()).unwrap().rake, None);
+}
+
 #[test]
 fn parse_money_actions_refunds_and_exact_ev() {
     let conn = connection();
@@ -117,18 +603,18 @@ fn recursive_folder_nested_zip_gzip_dedup_and_persistence() {
     let db_path = dir.path().join("tracker.db");
     let mut conn = db::open(&db_path).unwrap();
     let report =
-        importer::import_paths(&mut conn, &[input.to_string_lossy().into()], "Hero", |_| {})
-            .unwrap();
+        import_paths(&mut conn, &[input.to_string_lossy().into()], "Hero", |_| {}).unwrap();
     assert_eq!(report.imported, 5, "{:?}", report.issues);
     assert_eq!(report.duplicates, 10);
     assert_eq!(report.rejected, 0);
+    assert_eq!(report.workers, 2);
     drop(conn);
     let mut conn = db::open(&db_path).unwrap();
     let report =
-        importer::import_paths(&mut conn, &[input.to_string_lossy().into()], "Hero", |_| {})
-            .unwrap();
+        import_paths(&mut conn, &[input.to_string_lossy().into()], "Hero", |_| {}).unwrap();
     assert_eq!(report.imported, 0);
     assert_eq!(report.duplicates, 15);
+    assert_eq!(report.workers, 0, "duplicates must not start workers");
     let result = db::overview(&conn, Filter::default()).unwrap();
     assert_eq!(result.hands, 5);
     assert_eq!(result.net, 3870);
@@ -196,7 +682,7 @@ fn tar_gzip_utf16_and_partial_errors_keep_valid_hands() {
     )
     .unwrap();
     let mut conn = connection();
-    let report = importer::import_paths(
+    let report = import_paths(
         &mut conn,
         &[
             archive.to_string_lossy().into(),

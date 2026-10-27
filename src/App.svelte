@@ -477,6 +477,39 @@
               <div class="metric-foot">GG Poker · 6-max 现金桌</div>
             </article>
           </div>
+          <section class="panel rake-panel" aria-label="抽水统计">
+            <div>
+              <span>总 Rake（Hero）</span>
+              <strong>{money(overview.rake, overview.currency)}</strong>
+              <p>
+                {overview.rakeMissing
+                  ? `${overview.rakeMissing} 手无法精确归属，总计不可用；已确认 ${money(overview.knownRake, overview.currency)}`
+                  : '仅计从 Hero 赢得底池中扣除的 Rake'}
+              </p>
+            </div>
+            <div>
+              <span>Hero Rake / 100 手</span>
+              <strong
+                >{overview.rakeBb100?.toFixed(2) ?? '—'}<small>bb / 100</small
+                ></strong
+              >
+              <p>按每手大盲归一化，随当前筛选更新</p>
+            </div>
+            <div>
+              <span>Rake 已确认手数</span>
+              <strong
+                >{overview.rakeKnown.toLocaleString()}<small
+                  >/ {overview.hands.toLocaleString()} 手</small
+                ></strong
+              >
+              <p>无法区分的分池扣费或零头分配保留缺失，不做分摊</p>
+            </div>
+            <div>
+              <span>其他底池扣费（全桌）</span>
+              <strong>{money(overview.otherFees, overview.currency)}</strong>
+              <p>Jackpot / Bingo / Fortune / Tax，不计入抽水</p>
+            </div>
+          </section>
           <section class="panel chart-panel">
             <div class="panel-heading">
               <div>
@@ -563,10 +596,14 @@
               <p>摊牌手数 / 全部手数</p>
             </div>
             <div>
-              <span>FEES</span><strong
+              <span>RAKE</span><strong
                 >{money(overview.rake, overview.currency)}</strong
               >
-              <p>这些底池的总抽水与其他扣费</p>
+              <p>
+                {overview.rakeMissing
+                  ? `${overview.rakeMissing} 手无法精确归属`
+                  : `Hero Rake ${overview.rakeBb100?.toFixed(2) ?? '—'} bb / 100`}
+              </p>
             </div>
             <div class="stat-note">
               <ShieldCheck size={25} /><span
@@ -763,8 +800,8 @@
           <div class="setting-row">
             <span
               ><strong>支持范围</strong><small
-                >GG Poker 英文导出 · 6-max NLHE 现金桌 · 标准桌 / 常规 Rush &
-                Cash</small
+                >GG Poker 英文导出 · 6-max NLHE 现金桌 · 标准桌 / Rush &
+                Cash（含现金掉落）</small
               ></span
             ><span class="tag">无 HUD</span>
           </div>
@@ -776,8 +813,18 @@
             <div>
               <h3>实际盈利 = 收到的派彩 − 总投入</h3>
               <p>
-                未被跟注的下注退回后从投入扣除。抽水、Jackpot、Bingo、Fortune、Tax
-                计入底池对账；不包含站外返现与奖励。
+                未被跟注的下注退回后从投入扣除。Rake 与
+                Jackpot、Bingo、Fortune、Tax 分别统计，均计入底池对账。Hero Rake
+                仅统计从 Hero
+                赢得底池中实际扣除的金额，不按投入或派彩比例分摊；未获派彩计
+                0，独赢全部底池计入该手全部 Rake。
+                分池时按主池、边池和各组公共牌还原应得底池，再与派彩对账。
+                无法区分 Rake
+                与其他扣费、底牌未公开或零头分配不明确时保留缺失；有缺失时总
+                Rake 与 bb/100 留空，并显示已确认金额和手数。
+                实际盈利已包含这些费用，不重复扣除。不包含站外返现与奖励。 Cash
+                Drop 是平台注入主池的资金，计入派彩和全下
+                EV，不作为玩家投入或扣费。
               </p>
             </div>
           </div>
@@ -798,6 +845,8 @@
               <h3>翻后枚举所有可能的剩余公共牌</h3>
               <p>
                 使用全下锁定时的公共牌。平局按份额计算，简单多方全下按主池与边池拆分，记录的总扣费按底池金额比例分摊。
+                支持 All-in 发牌两次或三次；实际盈利合计所有派彩，EV
+                使用分叉前的全下权益，不受已发结果影响。
               </p>
             </div>
           </div>
@@ -807,8 +856,8 @@
               <h3>无法可靠计算时，明确保留缺失</h3>
               <p>
                 对手底牌未公开、复杂跨街边池等局面不推测权益。累计 EV
-                在缺失点后留空。多次发牌、保险、现金退出、Cash Drop、锦标赛和
-                PLO 暂不支持；导入异常会展示具体原因。
+                在缺失点后留空。保险、现金退出、锦标赛和 PLO
+                暂不支持；导入异常会展示具体原因。
               </p>
             </div>
           </div>
@@ -872,8 +921,8 @@
       {#if importing}<div class="import-progress">
           <LoaderCircle size={18} class="spin" /><span
             >{progress
-              ? `已读取 ${progress.files} 个文件，暂存 ${progress.imported} 手，跳过 ${progress.duplicates} 手重复`
-              : '准备导入…首次遇到翻前全下局面时将生成精确查表项。'}</span
+              ? `${progress.workers || 0} 个解析进程 · 已读取 ${progress.files} 个文件，暂存 ${progress.imported} 手，跳过 ${progress.duplicates} 手重复`
+              : '准备多进程导入…首次遇到翻前全下局面时将生成精确查表项。'}</span
           >
         </div>{/if}{#if report}<div class="report-summary" role="status">
           <CheckCheck size={21} />
@@ -925,10 +974,19 @@
           >{selected.tableName} · {selected.position}</span
         >
       </div>
-      <div class="review-table">
+      <div
+        class="review-table"
+        class:multiple-boards={selected.boards.length > 1}
+      >
         <div class="table-brand">GG POKER <span>6-MAX · NLHE</span></div>
         <div class="review-board">
-          {#if selected.board.length}<Cards
+          {#if selected.boards.length > 1}
+            {#each selected.boards as board, index}
+              <div class="runout">
+                <span>第 {index + 1} 次</span><Cards cards={board} />
+              </div>
+            {/each}
+          {:else if selected.board.length}<Cards
               cards={selected.board}
             />{:else}<span>未进入翻牌圈</span>{/if}
         </div>
@@ -952,6 +1010,17 @@
           >
         </div>
       </div>
+      <p class="ev-note">
+        本手全桌 Rake {money(selected.rake, selected.currency)} · 其他扣费 {money(
+          selected.otherFees,
+          selected.currency,
+        )} · Hero Rake {money(
+          selected.heroRake,
+          selected.currency,
+        )}{selected.heroRake == null ? '（牌谱不足以精确归属）' : ''}
+        {#if selected.cashDrop > 0}
+          · 现金掉落 {money(selected.cashDrop, selected.currency)}{/if}
+      </p>
       <p class="ev-note"><Info size={15} />{selected.evNote}</p>
       {#if selected.players.length}<h3 class="drawer-section-title">
           玩家与筹码

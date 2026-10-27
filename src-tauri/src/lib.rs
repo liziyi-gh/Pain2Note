@@ -1,9 +1,11 @@
 pub mod db;
 pub mod equity;
+pub mod import_worker;
 pub mod importer;
 pub mod model;
 pub mod parser;
 pub mod preflop;
+pub mod rake;
 
 use model::{Filter, Hand, HandRow, ImportReport, Overview};
 use std::{
@@ -115,6 +117,7 @@ pub fn builder(test_database: Option<PathBuf>) -> tauri::Builder<tauri::Wry> {
 }
 
 pub fn run() {
+    import_worker::run_if_requested();
     builder(None).run(context()).expect("无法启动 Pain2Note");
 }
 

@@ -27,8 +27,6 @@ flate2 = "1"
 tar = "0.4"
 pokers = "=0.10.0"
 chrono = { version = "0.4", default-features = false, features = ["std"] }
-
-[dev-dependencies]
 tempfile = "3"
 
 [profile.dev.package.pokers]

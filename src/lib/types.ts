@@ -25,8 +25,12 @@ export interface Hand extends HandRow {
   hero: string;
   players: Player[];
   board: string[];
+  boards: string[][];
   evNote: string;
   rake: number;
+  otherFees: number;
+  cashDrop: number;
+  heroRake: number | null;
   vpip: boolean;
   pfr: boolean;
   raw: string;
@@ -49,13 +53,19 @@ export interface Overview {
   vpip: number;
   pfr: number;
   showdown: number;
-  rake: number;
+  rake: number | null;
+  otherFees: number;
+  rakeKnown: number;
+  rakeMissing: number;
+  knownRake: number;
+  rakeBb100: number | null;
   currency: string;
   currencies: string[];
   stakes: number[];
   points: Point[];
 }
 export interface ImportReport {
+  workers: number;
   files: number;
   imported: number;
   duplicates: number;
@@ -84,6 +94,11 @@ export const emptyOverview: Overview = {
   pfr: 0,
   showdown: 0,
   rake: 0,
+  otherFees: 0,
+  rakeKnown: 0,
+  rakeMissing: 0,
+  knownRake: 0,
+  rakeBb100: 0,
   currency: 'USD',
   currencies: [],
   stakes: [],

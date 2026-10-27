@@ -59,6 +59,10 @@ export const demoHands: Hand[] = [
   },
 ].map((h, i) => ({
   ...h,
+  boards: i === 0 ? [h.board, ['4c', '5d', '6h', '8s', 'Kh']] : [h.board],
+  otherFees: 0,
+  cashDrop: 0,
+  heroRake: [0, 30, 0, 200, 300][i],
   currency: 'USD',
   bigBlind: 100,
   smallBlind: 50,
@@ -119,7 +123,19 @@ export function demoData(filter: Filter): {
     currencies: ['USD'],
     stakes: [100],
     points,
-    rake: hands.reduce((sum, h) => sum + h.rake, 0),
+    rake: hands.every((h) => h.heroRake != null)
+      ? hands.reduce((sum, h) => sum + h.heroRake!, 0)
+      : null,
+    otherFees: hands.reduce((sum, h) => sum + h.otherFees, 0),
+    rakeKnown: hands.filter((h) => h.heroRake != null).length,
+    rakeMissing: hands.filter((h) => h.heroRake == null).length,
+    knownRake: hands.reduce((sum, h) => sum + (h.heroRake ?? 0), 0),
+    rakeBb100: hands.some((h) => h.heroRake == null)
+      ? null
+      : hands.length
+        ? (hands.reduce((sum, h) => sum + h.heroRake! / h.bigBlind, 0) * 100) /
+          hands.length
+        : 0,
   };
   return { overview, hands: [...hands].reverse() };
 }

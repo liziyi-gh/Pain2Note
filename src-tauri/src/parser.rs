@@ -20,6 +20,32 @@ static REFUND: LazyLock<Regex> =
 static COLLECT: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^(.+) collected ([$€£¥]?[0-9.,]+) from (?:main |side )?pot").unwrap()
 });
+static STREET: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^\*\*\* (?:(FIRST|SECOND|THIRD) )?(FLOP|TURN|RIVER) \*\*\*").unwrap()
+});
+static WON: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?:won|collected) \(([$€£¥]?[0-9.,]+)\)").unwrap());
+static CASH_DROP: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)^Cash Drop to Pot\s*:\s*total\s+([$€£¥]?[0-9.,]+)\s*$").unwrap()
+});
+
+pub fn pot_fees(line: &str) -> Result<(i64, i64), String> {
+    let mut rake = 0;
+    let mut other = 0;
+    for part in line.split('|').skip(1).map(str::trim) {
+        if part.starts_with("Rake ") {
+            rake += amount(part)?;
+        } else if ["Jackpot ", "Bingo ", "Fortune ", "Tax "]
+            .iter()
+            .any(|label| part.starts_with(label))
+        {
+            other += amount(part)?;
+        } else if AMOUNT.find(part).is_some() && amount(part)? != 0 {
+            return Err(format!("未知底池扣费：{part}"));
+        }
+    }
+    Ok((rake, other))
+}
 
 pub fn money(s: &str) -> Result<i64, String> {
     let s = s
@@ -120,6 +146,9 @@ pub fn parse(raw: &str, hero_name: &str, conn: &rusqlite::Connection) -> Result<
     let mut button = 0;
     let mut players: Vec<Player> = Vec::new();
     let mut board = Vec::new();
+    let mut boards: Vec<Vec<String>> = vec![Vec::new()];
+    let mut run = 0;
+    let mut numbered = false;
     let mut locked = None;
     let mut first_all_in_street = None;
     let mut vpip = false;
@@ -128,27 +157,28 @@ pub fn parse(raw: &str, hero_name: &str, conn: &rusqlite::Connection) -> Result<
     let mut in_actions = false;
     let mut total_pot = None;
     let mut rake = 0;
-    let special = [
-        "FIRST FLOP",
-        "SECOND FLOP",
-        "FIRST TURN",
-        "SECOND TURN",
-        "FIRST RIVER",
-        "SECOND RIVER",
-        "Cashout",
-        "cashout",
-        "cashed out",
-        "Insurance",
-        "insurance",
-        "Cash Drop",
-        "cash drop",
-    ]
-    .iter()
-    .any(|s| raw.contains(s));
+    let mut other_fees = 0;
+    let mut cash_drop = 0;
+    let mut drop_seen = false;
+    let special = ["Cashout", "cashout", "cashed out", "Insurance", "insurance"]
+        .iter()
+        .any(|s| raw.contains(s));
     if special {
-        return Err("暂不支持多次发牌、保险、现金退出或 Cash Drop 牌谱".into());
+        return Err("暂不支持保险或现金退出牌谱".into());
     }
     for line in raw.lines().map(str::trim) {
+        if line.to_ascii_lowercase().contains("cash drop") {
+            let drop = CASH_DROP.captures(line).ok_or("未识别的 Cash Drop 格式")?;
+            if drop_seen || in_actions || summary {
+                return Err("Cash Drop 必须在发底牌前且只能记录一次".into());
+            }
+            cash_drop = money(&drop[1])?;
+            if cash_drop <= 0 {
+                return Err("Cash Drop 金额必须大于零".into());
+            }
+            drop_seen = true;
+            continue;
+        }
         if let Some(c) = TABLE.captures(line) {
             table_name = c[1].into();
             button = c[2].parse().unwrap();
@@ -174,18 +204,36 @@ pub fn parse(raw: &str, hero_name: &str, conn: &rusqlite::Connection) -> Result<
             in_actions = true;
             continue;
         }
-        if line.starts_with("*** FLOP")
-            || line.starts_with("*** TURN")
-            || line.starts_with("*** RIVER")
-        {
-            lock_board(&players, &board, &mut locked);
+        if let Some(street) = STREET.captures(line) {
+            let next_run = match street.get(1).map(|m| m.as_str()) {
+                Some("FIRST") => 0,
+                Some("SECOND") => 1,
+                Some("THIRD") => 2,
+                _ if numbered => return Err("多次发牌的公共牌标记不完整".into()),
+                _ => 0,
+            };
+            numbered |= street.get(1).is_some();
+            if next_run < run || next_run > run + 1 {
+                return Err("多次发牌顺序无效".into());
+            }
+            if next_run != run {
+                if board.len() != 5 {
+                    return Err("上一组公共牌不完整".into());
+                }
+                board = locked.clone().ok_or("多次发牌前下注尚未锁定")?;
+                if board.len() == 5 {
+                    return Err("河牌已完成，不能再次发牌".into());
+                }
+                boards.push(board.clone());
+                run = next_run;
+            } else if run == 0 {
+                lock_board(&players, &board, &mut locked);
+            }
             let next = cards(line)?;
-            let expected = if line.starts_with("*** FLOP") {
-                3
-            } else if line.starts_with("*** TURN") {
-                4
-            } else {
-                5
+            let expected = match &street[2] {
+                "FLOP" => 3,
+                "TURN" => 4,
+                _ => 5,
             };
             if next.len() != expected
                 || !next.starts_with(&board)
@@ -195,12 +243,25 @@ pub fn parse(raw: &str, hero_name: &str, conn: &rusqlite::Connection) -> Result<
                 return Err("公共牌顺序或数量无效".into());
             }
             board = next;
+            boards[run] = board.clone();
             for p in &mut players {
                 p.street_bet = 0;
             }
             continue;
         }
-        if line.starts_with("*** SHOW") || line.starts_with("*** SUMMARY") {
+        if line.starts_with("*** ")
+            && ["FLOP", "TURN", "RIVER"]
+                .iter()
+                .any(|street| line.contains(street))
+        {
+            return Err("未识别的多次发牌公共牌标记".into());
+        }
+        if line.starts_with("*** SHOW")
+            || line.starts_with("*** FIRST SHOW")
+            || line.starts_with("*** SECOND SHOW")
+            || line.starts_with("*** THIRD SHOW")
+            || line.starts_with("*** SUMMARY")
+        {
             lock_board(&players, &board, &mut locked);
             if line.starts_with("*** SUMMARY") {
                 summary = true;
@@ -230,18 +291,7 @@ pub fn parse(raw: &str, hero_name: &str, conn: &rusqlite::Connection) -> Result<
         }
         if line.starts_with("Total pot ") {
             total_pot = Some(amount(line)?);
-            // GG lists jackpot/bingo/fortune deductions separately from rake.
-            for part in line.split('|').skip(1) {
-                let part = part.trim();
-                if ["Rake", "Jackpot", "Bingo", "Fortune", "Tax"]
-                    .iter()
-                    .any(|label| part.starts_with(label))
-                {
-                    rake += amount(part)?;
-                } else if AMOUNT.find(part).is_some() && amount(part)? != 0 {
-                    return Err(format!("未知底池扣费：{part}"));
-                }
-            }
+            (rake, other_fees) = pot_fees(line)?;
             continue;
         }
         if line.starts_with("Dealt to ") {
@@ -265,11 +315,8 @@ pub fn parse(raw: &str, hero_name: &str, conn: &rusqlite::Connection) -> Result<
                         p.cards = cards(line)?;
                     }
                     if p.collected == 0 {
-                        if let Some((_, won)) = line
-                            .split_once(" won (")
-                            .or_else(|| line.split_once(" collected ("))
-                        {
-                            p.collected = amount(won)?;
+                        for won in WON.captures_iter(line) {
+                            p.collected += money(&won[1])?;
                         }
                     }
                 }
@@ -344,6 +391,14 @@ pub fn parse(raw: &str, hero_name: &str, conn: &rusqlite::Connection) -> Result<
     if !summary || total_pot.is_none() {
         return Err("牌谱不完整：缺少 SUMMARY / Total pot".into());
     }
+    if numbered && (boards.len() < 2 || boards.iter().any(|b| b.len() != 5)) {
+        return Err("多次发牌缺少完整公共牌".into());
+    }
+    if (raw.contains("Hand was run two times") && boards.len() != 2)
+        || (raw.contains("Hand was run three times") && boards.len() != 3)
+    {
+        return Err("多次发牌次数与公共牌不一致".into());
+    }
     if !(2..=6).contains(&players.len()) {
         return Err("玩家数量应为 2–6 人".into());
     }
@@ -364,34 +419,40 @@ pub fn parse(raw: &str, hero_name: &str, conn: &rusqlite::Connection) -> Result<
         return Err("缺少 Hero 的两张底牌".into());
     }
     let mut seen = [false; 52];
-    for c in players
-        .iter()
-        .flat_map(|p| p.cards.iter())
-        .chain(board.iter())
-    {
+    for c in players.iter().flat_map(|p| p.cards.iter()) {
         let card = equity::card(c)? as usize;
         if seen[card] {
             return Err("牌谱存在重复扑克牌".into());
         }
         seen[card] = true;
     }
-    if players
-        .iter()
-        .any(|p| !p.cards.is_empty() && p.cards.len() != 2)
-    {
+    let shared = locked.as_ref().map_or(0, Vec::len);
+    for (index, runout) in boards.iter().enumerate() {
+        for c in runout.iter().skip(if index == 0 { 0 } else { shared }) {
+            let card = equity::card(c)? as usize;
+            if seen[card] {
+                return Err("牌谱存在重复扑克牌".into());
+            }
+            seen[card] = true;
+        }
+    }
+    // GG allows opponents to voluntarily reveal just one card. Keep it as a
+    // blocker; the equity engine still requires two cards for every live hand.
+    if players.iter().any(|p| p.cards.len() > 2) {
         return Err("底牌数量无效".into());
     }
     let invested: i64 = players.iter().map(|p| p.invested).sum();
     let collected: i64 = players.iter().map(|p| p.collected).sum();
-    if total_pot != Some(invested) || collected + rake != invested {
+    let fees = rake + other_fees;
+    if total_pot != Some(invested + cash_drop) || collected + fees != invested + cash_drop {
         return Err(format!(
-            "底池无法对账：投入 {invested}，派彩 {collected}，扣费 {rake}（分）"
+            "底池无法对账：投入 {invested}，现金掉落 {cash_drop}，派彩 {collected}，扣费 {fees}（分）"
         ));
     }
     let hero_player = &players[hero];
     let net = hero_player.collected - hero_player.invested;
     let live = players.iter().filter(|p| !p.folded).count();
-    let (ev, ev_note) = if hero_player.folded || live < 2 || first_all_in_street.is_none() {
+    let (ev, mut ev_note) = if hero_player.folded || live < 2 || first_all_in_street.is_none() {
         (Some(net as f64), "未参与全下摊牌，EV 等于实际盈利".into())
     } else if let Some(ref frozen) = locked {
         if Some(frozen.len()) != first_all_in_street {
@@ -399,7 +460,9 @@ pub fn parse(raw: &str, hero_name: &str, conn: &rusqlite::Connection) -> Result<
         } else if frozen.len() == 5 {
             (Some(net as f64), "河牌全下，EV 等于实际盈利".into())
         } else {
-            match equity::adjusted_return(&players, hero, frozen, rake, conn) {
+            match equity::adjusted_return_with_cash_drop(
+                &players, hero, frozen, fees, cash_drop, conn,
+            ) {
                 Ok((value, note)) => (Some(value), note),
                 Err(reason) => (None, reason),
             }
@@ -407,6 +470,12 @@ pub fn parse(raw: &str, hero_name: &str, conn: &rusqlite::Connection) -> Result<
     } else {
         (None, "无法确定全下时点，EV 缺失".into())
     };
+    if boards.len() > 1 {
+        ev_note.push_str(&format!("；发牌 {} 次，派彩已合计", boards.len()));
+    }
+    if cash_drop > 0 {
+        ev_note.push_str("；Cash Drop 已计入底池，掉落资金归入主池");
+    }
     let mut seats: Vec<u8> = players.iter().map(|p| p.seat).collect();
     seats.sort_unstable();
     let button_index = seats
@@ -436,13 +505,20 @@ pub fn parse(raw: &str, hero_name: &str, conn: &rusqlite::Connection) -> Result<
         hero: hero_name.into(),
         hero_cards: hero_player.cards.clone(),
         position: position.into(),
-        showdown: raw.contains("*** SHOW") && !hero_player.folded,
+        showdown: (raw.contains("*** SHOW") || raw.contains("*** FIRST SHOW"))
+            && !hero_player.folded,
+        hero_rake: crate::rake::hero_paid(
+            &players, hero_name, &boards, rake, other_fees, cash_drop,
+        ),
         players,
-        board,
+        board: boards[0].clone(),
+        boards,
         net,
         ev,
         ev_note,
         rake,
+        other_fees,
+        cash_drop,
         vpip,
         pfr,
         raw: raw.into(),

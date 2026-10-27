@@ -13,6 +13,7 @@
     showEv?: boolean;
   } = $props();
   let hover = $state<number | null>(null);
+  let tooltipLeft = $state(0);
   let data = $derived([
     { index: 0, playedAt: '', net: 0, ev: 0, netBb: 0, evBb: 0 },
     ...points,
@@ -53,15 +54,29 @@
       ? `${value.toFixed(Math.abs(value) < 10 ? 1 : 0)}`
       : money(value * 100, currency);
   let active = $derived(hover == null ? null : data[hover]);
+  $effect(() => {
+    data;
+    hover = null;
+  });
   function move(event: PointerEvent) {
-    const bounds = (event.currentTarget as SVGElement).getBoundingClientRect();
-    const target = ((event.clientX - bounds.left) / bounds.width) * 960;
+    const svg = event.currentTarget as SVGSVGElement;
+    const matrix = svg.getScreenCTM();
+    if (!matrix) return;
+    const target = new DOMPoint(event.clientX, event.clientY).matrixTransform(
+      matrix.inverse(),
+    ).x;
     let nearest = 0;
     data.forEach((p, i) => {
       if (Math.abs(x(p) - target) < Math.abs(x(data[nearest]) - target))
         nearest = i;
     });
     hover = nearest;
+    const screen = new DOMPoint(x(data[nearest]), 0).matrixTransform(matrix);
+    const bounds = svg.parentElement!.getBoundingClientRect();
+    tooltipLeft = Math.max(
+      0,
+      Math.min(bounds.width - 180, screen.x - bounds.left),
+    );
   }
 </script>
 
@@ -146,10 +161,7 @@
         stroke-width="2"
       />{/if}
   </svg>
-  {#if active}<div
-      class="chart-tooltip"
-      style:left={`${Math.min(76, Math.max(8, (x(active) / 960) * 100))}%`}
-    >
+  {#if active}<div class="chart-tooltip" style:left={`${tooltipLeft}px`}>
       <strong>第 {active.index.toLocaleString()} 手</strong><span
         >实际盈利 <b>{label(net(active))}{unit === 'bb' ? ' bb' : ''}</b></span
       ><span

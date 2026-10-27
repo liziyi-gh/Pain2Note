@@ -112,6 +112,17 @@ pub fn adjusted_return(
     rake: i64,
     conn: &rusqlite::Connection,
 ) -> Result<(f64, String), String> {
+    adjusted_return_with_cash_drop(players, hero, board, rake, 0, conn)
+}
+
+pub fn adjusted_return_with_cash_drop(
+    players: &[Player],
+    hero: usize,
+    board: &[String],
+    rake: i64,
+    cash_drop: i64,
+    conn: &rusqlite::Connection,
+) -> Result<(f64, String), String> {
     let mut used = [false; 52];
     let mut holes = Vec::new();
     for p in players {
@@ -150,15 +161,17 @@ pub fn adjusted_return(
         .collect();
     levels.sort_unstable();
     levels.dedup();
-    let total: i64 = players.iter().map(|p| p.invested).sum();
-    if total <= 0 || rake > total {
+    let total: i64 = players.iter().map(|p| p.invested).sum::<i64>() + cash_drop;
+    if total <= 0 || rake < 0 || rake > total || cash_drop < 0 {
         return Err("底池金额无效".into());
     }
     let mut pots = Vec::new();
     let mut previous = 0;
     for level in levels {
-        let amount =
-            (level - previous) * players.iter().filter(|p| p.invested >= level).count() as i64;
+        // Platform money belongs to the main pot, including for a short stack.
+        let amount = (level - previous)
+            * players.iter().filter(|p| p.invested >= level).count() as i64
+            + if previous == 0 { cash_drop } else { 0 };
         let eligible: Vec<usize> = players
             .iter()
             .enumerate()
@@ -320,6 +333,19 @@ mod tests {
         assert_eq!(
             adjusted_return(&players, 0, &board, 25, &conn).unwrap().0,
             -10.0
+        );
+        // Drop belongs to Short's main pot; Hero only wins the side pot.
+        assert_eq!(
+            adjusted_return_with_cash_drop(&players, 0, &board, 0, 50, &conn)
+                .unwrap()
+                .0,
+            0.0
+        );
+        assert_eq!(
+            adjusted_return_with_cash_drop(&players, 1, &board, 30, 50, &conn)
+                .unwrap()
+                .0,
+            130.0
         );
     }
     fn score(s: &str) -> u32 {

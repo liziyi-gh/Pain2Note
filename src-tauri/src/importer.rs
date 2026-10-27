@@ -1,10 +1,10 @@
-use crate::{db, model::ImportReport, parser};
+use crate::{db, import_worker::Pool, model::ImportReport};
 use flate2::read::MultiGzDecoder;
 use rusqlite::Connection;
 use std::{
     fs::File,
     io::{Cursor, Read},
-    path::Path,
+    path::{Path, PathBuf},
     sync::LazyLock,
 };
 use walkdir::WalkDir;
@@ -21,6 +21,12 @@ fn supported(name: &str) -> bool {
         .any(|ext| name.to_lowercase().ends_with(ext))
 }
 
+struct Pending {
+    name: String,
+    id: String,
+    raw: String,
+}
+
 struct Importer<'a, F: Fn(&ImportReport)> {
     conn: &'a Connection,
     hero: &'a str,
@@ -28,9 +34,44 @@ struct Importer<'a, F: Fn(&ImportReport)> {
     bytes: u64,
     entries: usize,
     progress: F,
+    pool: Pool,
+    pending: Vec<Pending>,
+    fatal: Option<String>,
 }
 
 impl<F: Fn(&ImportReport)> Importer<'_, F> {
+    fn flush(&mut self) -> Result<(), String> {
+        if self.pending.is_empty() {
+            return Ok(());
+        }
+        let raw: Vec<&str> = self.pending.iter().map(|job| job.raw.as_str()).collect();
+        let results = self
+            .pool
+            .parse(self.conn, self.hero, &raw)
+            .inspect_err(|error| {
+                self.fatal = Some(error.clone());
+            })?;
+        self.report.workers = self.pool.len();
+        for (job, result) in self.pending.drain(..).zip(results) {
+            match result {
+                Ok(hand) => {
+                    if db::insert(self.conn, &hand).inspect_err(|error| {
+                        self.fatal = Some(error.clone());
+                    })? {
+                        self.report.imported += 1;
+                    } else {
+                        self.report.duplicates += 1;
+                    }
+                }
+                Err(error) => self
+                    .report
+                    .reject(format!("{} / {}: {error}", job.name, job.id)),
+            }
+        }
+        (self.progress)(&self.report);
+        Ok(())
+    }
+
     fn read(&mut self, reader: impl Read) -> Result<Vec<u8>, String> {
         let allowance = MAX_FILE.min(MAX_TOTAL.saturating_sub(self.bytes));
         let mut data = Vec::new();
@@ -82,7 +123,7 @@ impl<F: Fn(&ImportReport)> Importer<'_, F> {
                 if let Err(e) = result {
                     self.report.reject(format!("{label}: {e}"));
                 }
-                if self.bytes > MAX_TOTAL || self.entries > MAX_ENTRIES {
+                if self.fatal.is_some() || self.bytes > MAX_TOTAL || self.entries > MAX_ENTRIES {
                     break;
                 }
             }
@@ -115,7 +156,7 @@ impl<F: Fn(&ImportReport)> Importer<'_, F> {
                 if let Err(e) = result {
                     self.report.reject(format!("{name} → {child}: {e}"));
                 }
-                if self.bytes > MAX_TOTAL || self.entries > MAX_ENTRIES {
+                if self.fatal.is_some() || self.bytes > MAX_TOTAL || self.entries > MAX_ENTRIES {
                     break;
                 }
             }
@@ -133,26 +174,29 @@ impl<F: Fn(&ImportReport)> Importer<'_, F> {
                     .strip_prefix("Poker Hand #")
                     .and_then(|s| s.split_once(':'))
                     .map(|s| s.0);
-                if let Some(id) = id {
-                    if db::exists(self.conn, id)? {
-                        self.report.duplicates += 1;
-                        continue;
-                    }
+                let id = id.unwrap_or("未知手牌");
+                // A failed in-flight copy must not suppress a later valid copy.
+                if self.pending.iter().any(|job| job.id == id) {
+                    self.flush()?;
                 }
-                match parser::parse(raw, self.hero, self.conn) {
-                    Ok(hand) => {
-                        if db::insert(self.conn, &hand)? {
-                            self.report.imported += 1;
-                        } else {
-                            self.report.duplicates += 1;
-                        }
-                    }
-                    Err(e) => self
-                        .report
-                        .reject(format!("{name} / {}: {e}", id.unwrap_or("未知手牌"))),
+                if db::exists(self.conn, id).inspect_err(|error| {
+                    self.fatal = Some(error.clone());
+                })? {
+                    self.report.duplicates += 1;
+                    continue;
                 }
-                if i % 50 == 0 {
-                    (self.progress)(&self.report);
+                if raw.len() > 256 * 1024 {
+                    self.report
+                        .reject(format!("{name} / {id}: 单手牌谱超过 256 KiB"));
+                    continue;
+                }
+                self.pending.push(Pending {
+                    name: name.into(),
+                    id: id.into(),
+                    raw: raw.into(),
+                });
+                if self.pending.len() >= self.pool.capacity {
+                    self.flush()?;
                 }
             }
             (self.progress)(&self.report);
@@ -209,6 +253,22 @@ pub fn import_paths(
     hero: &str,
     progress: impl Fn(&ImportReport),
 ) -> Result<ImportReport, String> {
+    let executable = std::env::current_exe().map_err(|e| e.to_string())?;
+    let workers = std::thread::available_parallelism()
+        .map_or(1, usize::from)
+        .min(8);
+    import_paths_with_workers(conn, paths, hero, progress, executable, workers)
+}
+
+/// Alternate executable must implement the import-worker protocol (used by CLI/tests).
+pub fn import_paths_with_workers(
+    conn: &mut Connection,
+    paths: &[String],
+    hero: &str,
+    progress: impl Fn(&ImportReport),
+    executable: PathBuf,
+    workers: usize,
+) -> Result<ImportReport, String> {
     if hero.trim().is_empty() {
         return Err("Hero 名称不能为空".into());
     }
@@ -223,6 +283,9 @@ pub fn import_paths(
         bytes: 0,
         entries: 0,
         progress,
+        pool: Pool::new(executable, workers),
+        pending: vec![],
+        fatal: None,
     };
     for name in paths {
         let path = Path::new(name);
@@ -242,14 +305,18 @@ pub fn import_paths(
                     Err(e) => importer.report.reject(e.to_string()),
                     _ => (),
                 }
-                if importer.bytes > MAX_TOTAL || importer.entries > MAX_ENTRIES {
+                if importer.fatal.is_some()
+                    || importer.bytes > MAX_TOTAL
+                    || importer.entries > MAX_ENTRIES
+                {
                     break;
                 }
             }
         } else {
             importer.file(path);
         }
-        if importer.bytes > MAX_TOTAL || importer.entries > MAX_ENTRIES {
+        if importer.fatal.is_some() || importer.bytes > MAX_TOTAL || importer.entries > MAX_ENTRIES
+        {
             break;
         }
     }
@@ -258,6 +325,11 @@ pub fn import_paths(
             .report
             .reject("所选路径没有可导入的牌谱文件".into());
     }
+    if let Some(error) = importer.fatal.take() {
+        return Err(error);
+    }
+    importer.flush()?;
+    importer.pool.merge_cache(&tx)?;
     let report = importer.report;
     db::save_report(&tx, &report)?;
     tx.commit()
