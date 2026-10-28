@@ -198,3 +198,95 @@ test('import flow explains desktop requirement and keyboard focus stays in dialo
   await page.getByRole('button', { name: '设置与计算说明' }).click();
   await expect(page.getByText('翻前精确查表，结果永久复用')).toBeVisible();
 });
+
+test('replay advances and reverses individual decisions without revealing future cards', async ({
+  page,
+}) => {
+  await page.goto('/');
+  await page.getByRole('button', { name: '先看看演示' }).click();
+  await page
+    .getByRole('button', { name: '查看 RCDEMO002', exact: true })
+    .click();
+  await page.getByRole('button', { name: '手牌回放', exact: true }).click();
+  const replay = page.getByRole('region', { name: '手牌回放' });
+  await expect(replay).toContainText('发牌前');
+  await expect(replay).toContainText('等待公共牌');
+  await expect(replay).not.toContainText('实际盈利');
+  await replay.getByRole('button', { name: '下一步' }).click();
+  await expect(replay.locator('.replay-action')).toContainText(
+    'SmallBlind: posts small blind',
+  );
+  await expect(replay.locator('.replay-pot')).toContainText('$0.50');
+  await replay.getByRole('button', { name: '上一步' }).click();
+  await expect(replay.locator('.replay-pot')).toContainText('$0.00');
+  await replay.getByRole('button', { name: '翻牌', exact: true }).click();
+  await expect(replay.locator('.replay-boards')).toContainText('K');
+  await expect(replay.locator('.replay-pot')).toContainText('$6.50');
+  await replay.getByRole('button', { name: '下一步' }).click();
+  await expect(replay.locator('.replay-action')).toContainText(
+    'BigBlind: checks',
+  );
+  await replay.getByRole('button', { name: '跳到最后' }).click();
+  await expect(replay.locator('.replay-pot')).toContainText('$6.50');
+  await expect(replay.locator('.replay-players')).toContainText('$103.20');
+  await replay.getByRole('button', { name: '回到开始' }).click();
+  await expect(replay.locator('.replay-boards')).toContainText('等待公共牌');
+});
+
+test('replay handles split runouts and summary-only reveals and awards', async ({
+  page,
+}) => {
+  await page.goto('/');
+  await page.evaluate(async () => {
+    const demoPath = '/src/lib/demo.ts';
+    const { demoHands } = await import(/* @vite-ignore */ demoPath);
+    const response = await fetch('/fixtures/gg-multi-run.txt');
+    demoHands[0].raw = await response.text();
+    demoHands[0].heroCards = ['As', 'Ah'];
+  });
+  await page.getByRole('button', { name: '先看看演示' }).click();
+  await page
+    .getByRole('button', { name: '查看 RCDEMO001', exact: true })
+    .click();
+  await page.getByRole('button', { name: '手牌回放', exact: true }).click();
+  const replay = page.getByRole('region', { name: '手牌回放' });
+  await replay.getByRole('button', { name: '第 1 次 · 河牌' }).click();
+  await expect(replay.locator('.replay-boards')).not.toContainText('第 2 次');
+  await expect(replay.locator('.replay-players')).not.toContainText('K♠');
+  await replay.getByRole('button', { name: '第 2 次 · 河牌' }).click();
+  await expect(replay.locator('.replay-boards > div')).toHaveCount(2);
+  await replay.getByRole('button', { name: '跳到最后' }).click();
+  await expect(replay.locator('.replay-pot')).toContainText('$25.00');
+  await expect(replay.locator('.replay-players')).toContainText('$7.35');
+  await expect(replay.locator('.replay-players')).toContainText('K♠');
+});
+
+test('replay reconstructs cash drops and payouts recorded only in the summary', async ({
+  page,
+}) => {
+  await page.goto('/');
+  const result = await page.evaluate(async () => {
+    const demoPath = '/src/lib/demo.ts';
+    const replayPath = '/src/lib/replay.ts';
+    const { demoHands } = await import(/* @vite-ignore */ demoPath);
+    const { replayHand } = await import(/* @vite-ignore */ replayPath);
+    const hand = {
+      ...demoHands[1],
+      raw: demoHands[1].raw
+        .replace(
+          'SmallBlind: posts',
+          'Cash Drop to Pot : total $1\nSmallBlind: posts',
+        )
+        .replace('Hero collected $6.20 from pot\n', ''),
+    };
+    return replayHand(hand);
+  });
+  expect(result[1].pot).toBe(100);
+  expect(result.at(-1)?.pot).toBe(750);
+  expect(
+    result
+      .at(-1)
+      ?.players.find((player: { name: string }) => player.name === 'Hero')
+      ?.stack,
+  ).toBe(10320);
+});

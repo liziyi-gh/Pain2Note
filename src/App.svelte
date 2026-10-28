@@ -34,6 +34,7 @@
   } from 'lucide-svelte';
   import Cards from './components/Cards.svelte';
   import ProfitChart from './components/ProfitChart.svelte';
+  import HandReplay from './components/HandReplay.svelte';
   import {
     emptyOverview,
     money,
@@ -72,7 +73,8 @@
     dragOver = $state(false);
   let unit = $state('cash'),
     showEv = $state(true),
-    showRaw = $state(false);
+    showRaw = $state(false),
+    replayOpen = $state(false);
   let generation = 0,
     detailGeneration = 0;
   const nav = [
@@ -198,6 +200,7 @@
     const request = ++detailGeneration;
     detailLoading = true;
     showRaw = false;
+    replayOpen = false;
     try {
       const hand = demo
         ? demoHands.find((h) => h.id === id)!
@@ -978,90 +981,102 @@
           >{selected.tableName} · {selected.position}</span
         >
       </div>
-      <div
-        class="review-table"
-        class:multiple-boards={selected.boards.length > 1}
-      >
-        <div class="table-brand">GG POKER <span>6-MAX · NLHE</span></div>
-        <div class="review-board">
-          {#if selected.boards.length > 1}
-            {#each selected.boards as board, index}
-              <div class="runout">
-                <span>第 {index + 1} 次</span><Cards cards={board} />
-              </div>
-            {/each}
-          {:else if selected.board.length}<Cards
-              cards={selected.board}
-            />{:else}<span>未进入翻牌圈</span>{/if}
-        </div>
-        <div class="hero-seat">
-          <span>{selected.hero} <b>{selected.position}</b></span><Cards
-            cards={selected.heroCards}
-          />
-        </div>
+      <div class="review-tabs" aria-label="手牌查看方式">
+        <button class:active={!replayOpen} onclick={() => (replayOpen = false)}
+          >手牌详情</button
+        >
+        <button class:active={replayOpen} onclick={() => (replayOpen = true)}
+          >手牌回放</button
+        >
       </div>
-      <div class="review-results">
-        <div>
-          <span>实际盈利</span><strong
-            class:positive={selected.net >= 0}
-            class:negative={selected.net < 0}
-            >{money(selected.net, selected.currency, true)}</strong
-          >
+      {#if replayOpen}
+        <HandReplay hand={selected} />
+      {:else}
+        <div
+          class="review-table"
+          class:multiple-boards={selected.boards.length > 1}
+        >
+          <div class="table-brand">GG POKER <span>6-MAX · NLHE</span></div>
+          <div class="review-board">
+            {#if selected.boards.length > 1}
+              {#each selected.boards as board, index}
+                <div class="runout">
+                  <span>第 {index + 1} 次</span><Cards cards={board} />
+                </div>
+              {/each}
+            {:else if selected.board.length}<Cards
+                cards={selected.board}
+              />{:else}<span>未进入翻牌圈</span>{/if}
+          </div>
+          <div class="hero-seat">
+            <span>{selected.hero} <b>{selected.position}</b></span><Cards
+              cards={selected.heroCards}
+            />
+          </div>
         </div>
-        <div>
-          <span>All-in EV</span><strong
-            >{money(selected.ev, selected.currency, true)}</strong
-          >
+        <div class="review-results">
+          <div>
+            <span>实际盈利</span><strong
+              class:positive={selected.net >= 0}
+              class:negative={selected.net < 0}
+              >{money(selected.net, selected.currency, true)}</strong
+            >
+          </div>
+          <div>
+            <span>All-in EV</span><strong
+              >{money(selected.ev, selected.currency, true)}</strong
+            >
+          </div>
         </div>
-      </div>
-      <p class="ev-note">
-        本手全桌 Rake {money(selected.rake, selected.currency)} · 其他扣费 {money(
-          selected.otherFees,
-          selected.currency,
-        )} · Hero Rake {money(
-          selected.heroRake,
-          selected.currency,
-        )}{selected.heroRake == null ? '（牌谱不足以精确归属）' : ''}
-        · Hero 其他扣费 {money(
-          selected.heroOtherFees,
-          selected.currency,
-        )}{selected.heroOtherFees == null ? '（牌谱不足以精确归属）' : ''}
-        {#if selected.cashDrop > 0}
-          · 现金掉落 {money(selected.cashDrop, selected.currency)}{/if}
-      </p>
-      <p class="ev-note"><Info size={15} />{selected.evNote}</p>
-      {#if selected.players.length}<h3 class="drawer-section-title">
-          玩家与筹码
-        </h3>
-        <div class="player-list">
-          {#each selected.players as player}<div>
-              <span
-                ><b class="seat-number">{player.seat}</b
-                >{player.name}{#if player.name === selected.hero}<em>HERO</em
-                  >{/if}</span
-              ><span
-                >{#if player.cards.length}<Cards
-                    cards={player.cards}
-                    small
-                  />{:else}<small>未公开</small>{/if}</span
-              ><span
-                class="numeric"
-                class:negative={player.collected - player.invested < 0}
-                class:positive={player.collected - player.invested > 0}
-                >{money(
-                  player.collected - player.invested,
-                  selected.currency,
-                  true,
-                )}</span
-              >
-            </div>{/each}
-        </div>{/if}<button
-        class="raw-toggle"
-        onclick={() => (showRaw = !showRaw)}
-        ><FileText size={17} />{showRaw ? '收起' : '查看'}原始牌谱<ChevronRight
-          size={15}
-        /></button
-      >{#if showRaw}<pre class="raw-hand">{selected.raw}</pre>{/if}
+        <p class="ev-note">
+          本手全桌 Rake {money(selected.rake, selected.currency)} · 其他扣费 {money(
+            selected.otherFees,
+            selected.currency,
+          )} · Hero Rake {money(
+            selected.heroRake,
+            selected.currency,
+          )}{selected.heroRake == null ? '（牌谱不足以精确归属）' : ''}
+          · Hero 其他扣费 {money(
+            selected.heroOtherFees,
+            selected.currency,
+          )}{selected.heroOtherFees == null ? '（牌谱不足以精确归属）' : ''}
+          {#if selected.cashDrop > 0}
+            · 现金掉落 {money(selected.cashDrop, selected.currency)}{/if}
+        </p>
+        <p class="ev-note"><Info size={15} />{selected.evNote}</p>
+        {#if selected.players.length}<h3 class="drawer-section-title">
+            玩家与筹码
+          </h3>
+          <div class="player-list">
+            {#each selected.players as player}<div>
+                <span
+                  ><b class="seat-number">{player.seat}</b
+                  >{player.name}{#if player.name === selected.hero}<em>HERO</em
+                    >{/if}</span
+                ><span
+                  >{#if player.cards.length}<Cards
+                      cards={player.cards}
+                      small
+                    />{:else}<small>未公开</small>{/if}</span
+                ><span
+                  class="numeric"
+                  class:negative={player.collected - player.invested < 0}
+                  class:positive={player.collected - player.invested > 0}
+                  >{money(
+                    player.collected - player.invested,
+                    selected.currency,
+                    true,
+                  )}</span
+                >
+              </div>{/each}
+          </div>{/if}<button
+          class="raw-toggle"
+          onclick={() => (showRaw = !showRaw)}
+          ><FileText size={17} />{showRaw
+            ? '收起'
+            : '查看'}原始牌谱<ChevronRight size={15} /></button
+        >{#if showRaw}<pre class="raw-hand">{selected.raw}</pre>{/if}
+      {/if}
     </div>
   </div>
 {/if}

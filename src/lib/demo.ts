@@ -1,3 +1,4 @@
+import sampleHands from '../../fixtures/gg-six-max.txt?raw';
 import { emptyOverview, type Filter, type Hand, type Overview } from './types';
 
 // Explicitly opt-in UI preview. Never sent to the native database.
@@ -73,7 +74,23 @@ export const demoHands: Hand[] = [
   vpip: i !== 2,
   pfr: i !== 2,
   evNote: '界面演示值；真实 EV 由 Rust 引擎和 SQLite 权益表计算。',
-  raw: '演示预览。实际导入后可在这里查看完整 GG Poker 原始牌谱。',
+  raw:
+    i === 0
+      ? sampleHands
+          .trim()
+          .split(/\n\s*\n/)
+          [i].replace('*** FLOP', '*** FIRST FLOP')
+          .replace('*** TURN', '*** FIRST TURN')
+          .replace('*** RIVER', '*** FIRST RIVER')
+          .replace(
+            '*** SHOWDOWN ***',
+            '*** SECOND FLOP *** [4c 5d 6h]\n*** SECOND TURN *** [4c 5d 6h] [8s]\n*** SECOND RIVER *** [4c 5d 6h 8s] [Kh]\n*** FIRST SHOWDOWN ***',
+          )
+          .replace(
+            'BigBlind collected $197.50 from pot',
+            'BigBlind collected $98.75 from pot\n*** SECOND SHOWDOWN ***\nBigBlind collected $98.75 from pot',
+          )
+      : sampleHands.trim().split(/\n\s*\n/)[i],
 }));
 
 export function demoData(filter: Filter): {
