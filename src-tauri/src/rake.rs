@@ -10,8 +10,31 @@ pub fn hero_paid(
     other_fees: i64,
     cash_drop: i64,
 ) -> Option<i64> {
+    hero_fee(players, hero, boards, rake, other_fees, cash_drop)
+}
+
+/// Other fees deducted from Hero's awarded pots, if uniquely attributable.
+pub fn hero_other_fees(
+    players: &[Player],
+    hero: &str,
+    boards: &[Vec<String>],
+    rake: i64,
+    other_fees: i64,
+    cash_drop: i64,
+) -> Option<i64> {
+    hero_fee(players, hero, boards, other_fees, rake, cash_drop)
+}
+
+fn hero_fee(
+    players: &[Player],
+    hero: &str,
+    boards: &[Vec<String>],
+    target_fee: i64,
+    remaining_fees: i64,
+    cash_drop: i64,
+) -> Option<i64> {
     let hero = players.iter().position(|p| p.name == hero)?;
-    if rake == 0 || players[hero].collected == 0 || players[hero].folded {
+    if target_fee == 0 || players[hero].collected == 0 || players[hero].folded {
         return Some(0);
     }
     if players
@@ -19,7 +42,7 @@ pub fn hero_paid(
         .enumerate()
         .all(|(i, p)| i == hero || p.collected == 0)
     {
-        return Some(rake);
+        return Some(target_fee);
     }
     let mut levels: Vec<i64> = players
         .iter()
@@ -93,15 +116,14 @@ pub fn hero_paid(
         }
     }
     let collected = players[hero].collected;
-    let all_fees = rake + other_fees;
+    let all_fees = target_fee + remaining_fees;
     let fees_min = (gross_min - collected).max(0);
     let fees_max = (gross_max - collected).min(all_fees);
     if fees_min > fees_max {
         return None;
     }
-    // Only accept a unique cent value after accounting for the unspecified
-    // distribution of Jackpot/Bingo/Fortune/Tax among the awarded pots.
-    let rake_min = (fees_min - other_fees).max(0);
-    let rake_max = fees_max.min(rake);
-    (rake_min == rake_max).then_some(rake_min)
+    // Only accept a unique cent value given the unspecified fee distribution.
+    let fee_min = (fees_min - remaining_fees).max(0);
+    let fee_max = fees_max.min(target_fee);
+    (fee_min == fee_max).then_some(fee_min)
 }

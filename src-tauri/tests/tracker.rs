@@ -272,7 +272,7 @@ fn rake_is_separate_from_other_fees_and_normalized_per_hand_blind() {
     db::insert(&conn, &b).unwrap();
     let overview = db::overview(&conn, Filter::default()).unwrap();
     assert_eq!(overview.rake, Some(30));
-    assert_eq!(overview.other_fees, 0);
+    assert_eq!(overview.other_fees, Some(0));
     assert_eq!(overview.rake_known, 2);
     assert_eq!(overview.rake_missing, 0);
     assert_eq!(overview.known_rake, 30);
@@ -300,6 +300,96 @@ fn rake_is_separate_from_other_fees_and_normalized_per_hand_blind() {
 }
 
 #[test]
+fn other_fees_count_only_exact_hero_awards_and_follow_filters() {
+    let conn = connection();
+    let lost = hand(0).replace("Rake $3 | Jackpot $0", "Rake $2.80 | Jackpot $0.20");
+    let lost = parser::parse(&lost, "Hero", &conn).unwrap();
+    assert_eq!(lost.other_fees, 20);
+    assert_eq!(lost.hero_other_fees, Some(0));
+    let won = hand(1).replace("Rake $0.30 | Jackpot $0", "Rake $0.20 | Jackpot $0.10");
+    let won = parser::parse(&won, "Hero", &conn).unwrap();
+    assert_eq!(won.hero_other_fees, Some(10));
+    let split = parser::parse(MULTI, "Hero", &conn).unwrap();
+    assert_eq!(split.hero_other_fees, None);
+    let only_other = TIED.replace("Rake $0.30 | Jackpot $0", "Rake $0 | Jackpot $0.30");
+    let only_other = parser::parse(&only_other, "Hero", &conn).unwrap();
+    assert_eq!(only_other.hero_other_fees, Some(15));
+    let unknown = TIED
+        .replace("Rake $0.30 | Jackpot $0", "Rake $0 | Jackpot $0.30")
+        .replace("showed [Ac Ah]", "mucked");
+    assert_eq!(
+        parser::parse(&unknown, "Hero", &conn)
+            .unwrap()
+            .hero_other_fees,
+        None
+    );
+    for hand in [&lost, &won, &split, &only_other] {
+        db::insert(&conn, hand).unwrap();
+    }
+    let overview = db::overview(&conn, Filter::default()).unwrap();
+    assert_eq!(overview.other_fees, None);
+    assert_eq!(overview.known_other_fees, 25);
+    assert_eq!(overview.other_fees_known, 3);
+    assert_eq!(overview.other_fees_missing, 1);
+    let filtered = db::overview(
+        &conn,
+        Filter {
+            search: Some(won.id),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(filtered.other_fees, Some(10));
+    assert_eq!(filtered.other_fees_missing, 0);
+    let empty = db::overview(
+        &conn,
+        Filter {
+            search: Some("NO_SUCH_HAND".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(empty.other_fees, Some(0));
+}
+
+#[test]
+fn version_three_migration_backfills_hero_other_fees() {
+    let conn = connection();
+    let won = parser::parse(
+        &hand(1).replace("Rake $0.30 | Jackpot $0", "Rake $0.20 | Jackpot $0.10"),
+        "Hero",
+        &conn,
+    )
+    .unwrap();
+    let split = parser::parse(MULTI, "Hero", &conn).unwrap();
+    for hand in [&won, &split] {
+        db::insert(&conn, hand).unwrap();
+        let mut old = serde_json::to_value(hand).unwrap();
+        old.as_object_mut().unwrap().remove("heroOtherFees");
+        conn.execute(
+            "UPDATE hands SET data=?1 WHERE id=?2",
+            rusqlite::params![old.to_string(), hand.id],
+        )
+        .unwrap();
+    }
+    conn.execute_batch("ALTER TABLE hands DROP COLUMN hero_other_fees; PRAGMA user_version=3;")
+        .unwrap();
+    db::migrate(&conn).unwrap();
+    db::migrate(&conn).unwrap();
+    let restored = db::detail(&conn, &won.id).unwrap();
+    assert_eq!(restored.hero_other_fees, Some(10));
+    assert_eq!(restored.hero_rake, won.hero_rake);
+    assert_eq!(restored.net, won.net);
+    let restored_split = db::detail(&conn, &split.id).unwrap();
+    assert_eq!(restored_split.hero_other_fees, None);
+    assert_eq!(restored_split.boards, split.boards);
+    let overview = db::overview(&conn, Filter::default()).unwrap();
+    assert_eq!(overview.other_fees, None);
+    assert_eq!(overview.known_other_fees, 10);
+    assert_eq!(overview.other_fees_missing, 1);
+}
+
+#[test]
 fn version_one_migration_splits_fees_without_changing_results() {
     let conn = connection();
     let raw = hand(1).replace("Rake $0.30 | Jackpot $0", "Rake $0.20 | Jackpot $0.10");
@@ -312,7 +402,7 @@ fn version_one_migration_splits_fees_without_changing_results() {
     legacy["rake"] = 30.into();
     conn.execute("UPDATE hands SET rake=30,data=?1", [legacy.to_string()])
         .unwrap();
-    conn.execute_batch("ALTER TABLE hands DROP COLUMN other_fees; ALTER TABLE hands DROP COLUMN hero_rake; PRAGMA user_version=1;").unwrap();
+    conn.execute_batch("ALTER TABLE hands DROP COLUMN other_fees; ALTER TABLE hands DROP COLUMN hero_rake; ALTER TABLE hands DROP COLUMN hero_other_fees; PRAGMA user_version=1;").unwrap();
     db::migrate(&conn).unwrap();
     db::migrate(&conn).unwrap();
     let result = db::detail(&conn, &parsed.id).unwrap();
@@ -324,7 +414,7 @@ fn version_one_migration_splits_fees_without_changing_results() {
     assert_eq!(result.ev, parsed.ev);
     let overview = db::overview(&conn, Filter::default()).unwrap();
     assert_eq!(overview.rake, Some(20));
-    assert_eq!(overview.other_fees, 10);
+    assert_eq!(overview.other_fees, Some(10));
 }
 
 #[test]
@@ -450,7 +540,7 @@ fn version_two_migration_discards_estimates_and_preserves_multiple_boards() {
     for hand in [&winner, &multi] {
         db::insert(&conn, hand).unwrap();
     }
-    conn.execute_batch("ALTER TABLE hands DROP COLUMN hero_rake; ALTER TABLE hands ADD COLUMN hero_rake REAL NOT NULL DEFAULT 0; PRAGMA user_version=2;").unwrap();
+    conn.execute_batch("ALTER TABLE hands DROP COLUMN hero_rake; ALTER TABLE hands ADD COLUMN hero_rake REAL NOT NULL DEFAULT 0; ALTER TABLE hands DROP COLUMN hero_other_fees; PRAGMA user_version=2;").unwrap();
     for hand in [&winner, &multi] {
         let mut legacy = serde_json::to_value(hand).unwrap();
         legacy["heroRake"] = 12.34.into();

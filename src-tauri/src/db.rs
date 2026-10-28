@@ -16,10 +16,10 @@ pub fn migrate(conn: &Connection) -> Result<(), String> {
     let version: i64 = conn
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .map_err(|e| e.to_string())?;
-    if version > 3 {
+    if version > 4 {
         return Err("数据库由较新版本创建，请更新应用".into());
     }
-    if version == 3 {
+    if version == 4 {
         return Ok(());
     }
     if version == 0 {
@@ -46,13 +46,17 @@ pub fn migrate(conn: &Connection) -> Result<(), String> {
     if version < 2 {
         tx.execute_batch("ALTER TABLE hands ADD COLUMN other_fees INTEGER NOT NULL DEFAULT 0;")
             .map_err(|e| e.to_string())?;
-    } else {
+    } else if version == 2 {
         // Discard the old investment-based estimates. Exact rake is nullable
         // and stored as integer cents, including for already-imported hands.
         tx.execute_batch("ALTER TABLE hands DROP COLUMN hero_rake;")
             .map_err(|e| e.to_string())?;
     }
-    tx.execute_batch("ALTER TABLE hands ADD COLUMN hero_rake INTEGER;")
+    if version < 3 {
+        tx.execute_batch("ALTER TABLE hands ADD COLUMN hero_rake INTEGER;")
+            .map_err(|e| e.to_string())?;
+    }
+    tx.execute_batch("ALTER TABLE hands ADD COLUMN hero_other_fees INTEGER;")
         .map_err(|e| e.to_string())?;
     let mut stmt = tx
         .prepare("SELECT data FROM hands")
@@ -85,12 +89,21 @@ pub fn migrate(conn: &Connection) -> Result<(), String> {
             hand.other_fees,
             hand.cash_drop,
         );
+        hand.hero_other_fees = crate::rake::hero_other_fees(
+            &hand.players,
+            &hand.hero,
+            &hand.boards,
+            hand.rake,
+            hand.other_fees,
+            hand.cash_drop,
+        );
         tx.execute(
-            "UPDATE hands SET rake=?1,other_fees=?2,hero_rake=?3,data=?4 WHERE id=?5",
+            "UPDATE hands SET rake=?1,other_fees=?2,hero_rake=?3,hero_other_fees=?4,data=?5 WHERE id=?6",
             params![
                 hand.rake,
                 hand.other_fees,
                 hand.hero_rake,
+                hand.hero_other_fees,
                 serde_json::to_string(&hand).map_err(|e| e.to_string())?,
                 hand.id
             ],
@@ -98,7 +111,7 @@ pub fn migrate(conn: &Connection) -> Result<(), String> {
         .map_err(|e| e.to_string())?;
     }
     drop(stmt);
-    tx.execute_batch("PRAGMA user_version=3;")
+    tx.execute_batch("PRAGMA user_version=4;")
         .map_err(|e| e.to_string())?;
     tx.commit().map_err(|e| e.to_string())
 }
@@ -114,10 +127,10 @@ pub fn exists(conn: &Connection, id: &str) -> Result<bool, String> {
 
 pub fn insert(conn: &Connection, hand: &Hand) -> Result<bool, String> {
     let json = serde_json::to_string(hand).map_err(|e| e.to_string())?;
-    conn.execute("INSERT INTO hands (id,played_at,currency,big_blind,cards,net,ev,vpip,pfr,showdown,rake,data,other_fees,hero_rake)
-        VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14) ON CONFLICT(id) DO NOTHING",
+    conn.execute("INSERT INTO hands (id,played_at,currency,big_blind,cards,net,ev,vpip,pfr,showdown,rake,data,other_fees,hero_rake,hero_other_fees)
+        VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15) ON CONFLICT(id) DO NOTHING",
         params![hand.id, hand.played_at, hand.currency, hand.big_blind, hand.hero_cards.join(" "), hand.net,
-            hand.ev, hand.vpip, hand.pfr, hand.showdown, hand.rake, json, hand.other_fees, hand.hero_rake])
+            hand.ev, hand.vpip, hand.pfr, hand.showdown, hand.rake, json, hand.other_fees, hand.hero_rake, hand.hero_other_fees])
         .map(|n| n == 1).map_err(|e| e.to_string())
 }
 
@@ -197,7 +210,10 @@ pub fn overview(conn: &Connection, filter: Filter) -> Result<Overview, String> {
         pfr: 0.0,
         showdown: 0.0,
         rake: Some(0),
-        other_fees: 0,
+        other_fees: Some(0),
+        other_fees_known: 0,
+        other_fees_missing: 0,
+        known_other_fees: 0,
         rake_known: 0,
         rake_missing: 0,
         known_rake: 0,
@@ -207,7 +223,7 @@ pub fn overview(conn: &Connection, filter: Filter) -> Result<Overview, String> {
         stakes,
         points: vec![],
     };
-    let mut stmt = conn.prepare(&format!("SELECT played_at,net,ev,big_blind,vpip,pfr,showdown,other_fees,hero_rake FROM hands WHERE {WHERE} ORDER BY played_at,id")).map_err(|e| e.to_string())?;
+    let mut stmt = conn.prepare(&format!("SELECT played_at,net,ev,big_blind,vpip,pfr,showdown,hero_other_fees,hero_rake FROM hands WHERE {WHERE} ORDER BY played_at,id")).map_err(|e| e.to_string())?;
     let rows = stmt
         .query_map(
             params![
@@ -226,7 +242,7 @@ pub fn overview(conn: &Connection, filter: Filter) -> Result<Overview, String> {
                     r.get::<_, f64>(4)?,
                     r.get::<_, f64>(5)?,
                     r.get::<_, f64>(6)?,
-                    r.get::<_, i64>(7)?,
+                    r.get::<_, Option<i64>>(7)?,
                     r.get::<_, Option<i64>>(8)?,
                 ))
             },
@@ -253,7 +269,13 @@ pub fn overview(conn: &Connection, filter: Filter) -> Result<Overview, String> {
         result.pfr += pfr;
         result.showdown += showdown;
         result.rake = result.rake.zip(hero_rake).map(|(a, b)| a + b);
-        result.other_fees += other_fees;
+        result.other_fees = result.other_fees.zip(other_fees).map(|(a, b)| a + b);
+        if let Some(paid) = other_fees {
+            result.known_other_fees += paid;
+            result.other_fees_known += 1;
+        } else {
+            result.other_fees_missing += 1;
+        }
         result.rake_bb100 = result
             .rake_bb100
             .zip(hero_rake)

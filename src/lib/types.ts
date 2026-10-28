@@ -31,6 +31,7 @@ export interface Hand extends HandRow {
   otherFees: number;
   cashDrop: number;
   heroRake: number | null;
+  heroOtherFees: number | null;
   vpip: boolean;
   pfr: boolean;
   raw: string;
@@ -54,7 +55,10 @@ export interface Overview {
   pfr: number;
   showdown: number;
   rake: number | null;
-  otherFees: number;
+  otherFees: number | null;
+  otherFeesKnown: number;
+  otherFeesMissing: number;
+  knownOtherFees: number;
   rakeKnown: number;
   rakeMissing: number;
   knownRake: number;
@@ -95,6 +99,9 @@ export const emptyOverview: Overview = {
   showdown: 0,
   rake: 0,
   otherFees: 0,
+  otherFeesKnown: 0,
+  otherFeesMissing: 0,
+  knownOtherFees: 0,
   rakeKnown: 0,
   rakeMissing: 0,
   knownRake: 0,

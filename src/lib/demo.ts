@@ -63,6 +63,7 @@ export const demoHands: Hand[] = [
   otherFees: 0,
   cashDrop: 0,
   heroRake: [0, 30, 0, 200, 300][i],
+  heroOtherFees: 0,
   currency: 'USD',
   bigBlind: 100,
   smallBlind: 50,
@@ -126,7 +127,12 @@ export function demoData(filter: Filter): {
     rake: hands.every((h) => h.heroRake != null)
       ? hands.reduce((sum, h) => sum + h.heroRake!, 0)
       : null,
-    otherFees: hands.reduce((sum, h) => sum + h.otherFees, 0),
+    otherFees: hands.every((h) => h.heroOtherFees != null)
+      ? hands.reduce((sum, h) => sum + h.heroOtherFees!, 0)
+      : null,
+    otherFeesKnown: hands.filter((h) => h.heroOtherFees != null).length,
+    otherFeesMissing: hands.filter((h) => h.heroOtherFees == null).length,
+    knownOtherFees: hands.reduce((sum, h) => sum + (h.heroOtherFees ?? 0), 0),
     rakeKnown: hands.filter((h) => h.heroRake != null).length,
     rakeMissing: hands.filter((h) => h.heroRake == null).length,
     knownRake: hands.reduce((sum, h) => sum + (h.heroRake ?? 0), 0),

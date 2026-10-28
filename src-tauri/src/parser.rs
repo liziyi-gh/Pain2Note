@@ -510,6 +510,9 @@ pub fn parse(raw: &str, hero_name: &str, conn: &rusqlite::Connection) -> Result<
         hero_rake: crate::rake::hero_paid(
             &players, hero_name, &boards, rake, other_fees, cash_drop,
         ),
+        hero_other_fees: crate::rake::hero_other_fees(
+            &players, hero_name, &boards, rake, other_fees, cash_drop,
+        ),
         players,
         board: boards[0].clone(),
         boards,

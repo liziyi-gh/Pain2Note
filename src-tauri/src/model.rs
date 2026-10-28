@@ -40,6 +40,8 @@ pub struct Hand {
     pub cash_drop: i64,
     #[serde(default)]
     pub hero_rake: Option<i64>,
+    #[serde(default)]
+    pub hero_other_fees: Option<i64>,
     pub vpip: bool,
     pub pfr: bool,
     pub showdown: bool,
@@ -101,7 +103,10 @@ pub struct Overview {
     pub pfr: f64,
     pub showdown: f64,
     pub rake: Option<i64>,
-    pub other_fees: i64,
+    pub other_fees: Option<i64>,
+    pub other_fees_known: usize,
+    pub other_fees_missing: usize,
+    pub known_other_fees: i64,
     pub rake_known: usize,
     pub rake_missing: usize,
     pub known_rake: i64,

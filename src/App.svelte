@@ -505,9 +505,13 @@
               <p>无法区分的分池扣费或零头分配保留缺失，不做分摊</p>
             </div>
             <div>
-              <span>其他底池扣费（全桌）</span>
+              <span>其他底池扣费（Hero）</span>
               <strong>{money(overview.otherFees, overview.currency)}</strong>
-              <p>Jackpot / Bingo / Fortune / Tax，不计入抽水</p>
+              <p>
+                {overview.otherFeesMissing
+                  ? `${overview.otherFeesMissing} 手无法精确归属，总计不可用；已确认 ${money(overview.knownOtherFees, overview.currency)}`
+                  : '仅计 Hero 赢得底池的 Jackpot / Bingo / Fortune / Tax'}
+              </p>
             </div>
           </section>
           <section class="panel chart-panel">
@@ -821,7 +825,7 @@
                 分池时按主池、边池和各组公共牌还原应得底池，再与派彩对账。
                 无法区分 Rake
                 与其他扣费、底牌未公开或零头分配不明确时保留缺失；有缺失时总
-                Rake 与 bb/100 留空，并显示已确认金额和手数。
+                Rake、其他底池扣费与 bb/100 分别留空，并显示已确认金额和手数。
                 实际盈利已包含这些费用，不重复扣除。不包含站外返现与奖励。 Cash
                 Drop 是平台注入主池的资金，计入派彩和全下
                 EV，不作为玩家投入或扣费。
@@ -1018,6 +1022,10 @@
           selected.heroRake,
           selected.currency,
         )}{selected.heroRake == null ? '（牌谱不足以精确归属）' : ''}
+        · Hero 其他扣费 {money(
+          selected.heroOtherFees,
+          selected.currency,
+        )}{selected.heroOtherFees == null ? '（牌谱不足以精确归属）' : ''}
         {#if selected.cashDrop > 0}
           · 现金掉落 {money(selected.cashDrop, selected.currency)}{/if}
       </p>

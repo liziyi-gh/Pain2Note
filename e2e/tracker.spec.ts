@@ -82,6 +82,39 @@ test('ambiguous Hero rake never appears as an exact total or zero', async ({
   await expect(panel).not.toContainText('总计不可用');
 });
 
+test('other pot fees show only Hero deductions and disclose missing attribution', async ({
+  page,
+}) => {
+  await page.goto('/');
+  await page.evaluate(async () => {
+    const fixture = '/src/lib/demo.ts';
+    const { demoHands } = await import(/* @vite-ignore */ fixture);
+    demoHands[0].otherFees = 500;
+    demoHands[0].heroOtherFees = 0;
+    demoHands[1].otherFees = 30;
+    demoHands[1].heroOtherFees = 30;
+    demoHands[2].otherFees = 20;
+    demoHands[2].heroOtherFees = null;
+  });
+  await page.getByRole('button', { name: '先看看演示' }).click();
+  const fees = page
+    .getByRole('region', { name: '抽水统计' })
+    .locator('div')
+    .filter({ hasText: '其他底池扣费（Hero）' });
+  await expect(fees.locator('strong')).toHaveText('—');
+  await expect(fees).toContainText(
+    '1 手无法精确归属，总计不可用；已确认 $0.30',
+  );
+  await page
+    .getByRole('textbox', { name: '搜索手牌 ID 或底牌' })
+    .fill('RCDEMO001');
+  await expect(fees.locator('strong')).toHaveText('$0.00');
+  await page
+    .getByRole('textbox', { name: '搜索手牌 ID 或底牌' })
+    .fill('RCDEMO002');
+  await expect(fees.locator('strong')).toHaveText('$0.30');
+});
+
 test('hand review displays every runout and the fee breakdown', async ({
   page,
 }) => {
