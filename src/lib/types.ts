@@ -1,3 +1,5 @@
+import { emptyHud, type HudStats } from './hud';
+
 export interface Player {
   seat: number;
   name: string;
@@ -45,6 +47,7 @@ export interface Point {
   evBb: number | null;
 }
 export interface Overview {
+  hud: HudStats;
   hands: number;
   net: number;
   ev: number | null;
@@ -88,6 +91,7 @@ export interface Filter {
   search?: string;
 }
 export const emptyOverview: Overview = {
+  hud: emptyHud(),
   hands: 0,
   net: 0,
   ev: 0,

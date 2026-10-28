@@ -1,5 +1,6 @@
 import sampleHands from '../../fixtures/gg-six-max.txt?raw';
 import { emptyOverview, type Filter, type Hand, type Overview } from './types';
+import { demoHud } from './hud';
 
 // Explicitly opt-in UI preview. Never sent to the native database.
 export const demoHands: Hand[] = [
@@ -124,6 +125,7 @@ export function demoData(filter: Filter): {
   });
   const overview: Overview = {
     ...emptyOverview,
+    hud: demoHud(hands.map((h) => demoHands.indexOf(h))),
     hands: hands.length,
     net,
     ev,

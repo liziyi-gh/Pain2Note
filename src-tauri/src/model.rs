@@ -93,6 +93,7 @@ pub struct Point {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Overview {
+    pub hud: crate::stats::HudStats,
     pub hands: usize,
     pub net: i64,
     pub ev: Option<f64>,

@@ -11,6 +11,91 @@ fn connection() -> rusqlite::Connection {
     c
 }
 
+#[test]
+fn hud_counts_real_actions_uses_opportunities_and_backfills_existing_hands() {
+    let conn = connection();
+    for raw in SAMPLE.split("\n\n").filter(|s| !s.trim().is_empty()) {
+        let h = parser::parse(raw, "Hero", &conn).unwrap();
+        assert!(db::insert(&conn, &h).unwrap());
+        assert!(!db::insert(&conn, &h).unwrap());
+    }
+    let before = db::overview(&conn, Filter::default()).unwrap();
+    let s = &before.hud;
+    assert_eq!((s.vpip.hits, s.vpip.opportunities), (4, 5));
+    assert_eq!((s.three_bet.hits, s.three_bet.opportunities), (0, 1));
+    assert_eq!((s.four_bet.hits, s.four_bet.opportunities), (0, 0));
+    assert_eq!(
+        (s.fold_to_three_bet.hits, s.fold_to_three_bet.opportunities),
+        (0, 2)
+    );
+    assert_eq!((s.wtsd.hits, s.wtsd.opportunities), (3, 4));
+    assert_eq!(
+        (s.won_at_showdown.hits, s.won_at_showdown.opportunities),
+        (2, 3)
+    );
+    assert_eq!(
+        (s.won_when_saw_flop.hits, s.won_when_saw_flop.opportunities),
+        (3, 4)
+    );
+    assert_eq!(
+        (s.streets[0].cbet.hits, s.streets[0].cbet.opportunities),
+        (1, 1)
+    );
+    assert_eq!(s.streets.each_ref().map(|s| s.seen), [4, 3, 3]);
+    assert_eq!((s.aggression.bets, s.aggression.calls), (1, 1));
+
+    // Upgrade a real v4 schema, preserving stored results, with no reimport or EV work.
+    conn.execute_batch("ALTER TABLE hands DROP COLUMN stats; PRAGMA user_version=4;")
+        .unwrap();
+    db::migrate(&conn).unwrap();
+    db::migrate(&conn).unwrap();
+    let after = db::overview(&conn, Filter::default()).unwrap();
+    assert_eq!(
+        serde_json::to_value(&before).unwrap(),
+        serde_json::to_value(&after).unwrap()
+    );
+    let one = db::overview(
+        &conn,
+        Filter {
+            search: Some("RCDEMO002".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(one.hands, 1);
+    assert_eq!(one.hud.wtsd.opportunities, 1);
+    assert_eq!(one.hud.wtsd.hits, 0);
+    assert_eq!(one.hud.streets[0].cbet.hits, 1);
+    for filter in [
+        Filter {
+            from: Some("2026-10-21".into()),
+            ..Default::default()
+        },
+        Filter {
+            to: Some("2026-10-19".into()),
+            ..Default::default()
+        },
+        Filter {
+            currency: Some("EUR".into()),
+            ..Default::default()
+        },
+        Filter {
+            big_blind: Some(200),
+            ..Default::default()
+        },
+        Filter {
+            search: Some("no-match".into()),
+            ..Default::default()
+        },
+    ] {
+        let empty = db::overview(&conn, filter).unwrap();
+        assert_eq!(empty.hands, 0);
+        assert_eq!(empty.hud.vpip.opportunities, 0);
+        assert_eq!(empty.hud.wtsd.opportunities, 0);
+        assert_eq!(empty.hud.streets[0].cbet.opportunities, 0);
+    }
+}
+
 const MULTI: &str = include_str!("../../fixtures/gg-multi-run.txt");
 
 fn import_paths(

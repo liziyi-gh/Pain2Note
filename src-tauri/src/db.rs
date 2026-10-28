@@ -16,11 +16,14 @@ pub fn migrate(conn: &Connection) -> Result<(), String> {
     let version: i64 = conn
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .map_err(|e| e.to_string())?;
-    if version > 4 {
+    if version > 5 {
         return Err("数据库由较新版本创建，请更新应用".into());
     }
-    if version == 4 {
+    if version == 5 {
         return Ok(());
+    }
+    if version == 4 {
+        return migrate_stats(conn);
     }
     if version == 0 {
         conn.execute_batch("BEGIN;
@@ -113,6 +116,40 @@ pub fn migrate(conn: &Connection) -> Result<(), String> {
     drop(stmt);
     tx.execute_batch("PRAGMA user_version=4;")
         .map_err(|e| e.to_string())?;
+    tx.commit().map_err(|e| e.to_string())?;
+    migrate_stats(conn)
+}
+
+fn migrate_stats(conn: &Connection) -> Result<(), String> {
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    let has_stats: bool = tx
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('hands') WHERE name='stats')",
+            [],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    if !has_stats {
+        tx.execute_batch("ALTER TABLE hands ADD COLUMN stats TEXT NOT NULL DEFAULT '{}';")
+            .map_err(|e| e.to_string())?;
+    }
+    let mut stmt = tx
+        .prepare("SELECT id,data FROM hands")
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+        .map_err(|e| e.to_string())?;
+    for row in rows {
+        let (id, json) = row.map_err(|e| e.to_string())?;
+        let hand = serde_json::from_str::<Hand>(&json).map_err(|e| e.to_string())?;
+        let stats =
+            serde_json::to_string(&crate::stats::for_hand(&hand)).map_err(|e| e.to_string())?;
+        tx.execute("UPDATE hands SET stats=?1 WHERE id=?2", params![stats, id])
+            .map_err(|e| e.to_string())?;
+    }
+    drop(stmt);
+    tx.execute_batch("PRAGMA user_version=5;")
+        .map_err(|e| e.to_string())?;
     tx.commit().map_err(|e| e.to_string())
 }
 
@@ -127,10 +164,11 @@ pub fn exists(conn: &Connection, id: &str) -> Result<bool, String> {
 
 pub fn insert(conn: &Connection, hand: &Hand) -> Result<bool, String> {
     let json = serde_json::to_string(hand).map_err(|e| e.to_string())?;
-    conn.execute("INSERT INTO hands (id,played_at,currency,big_blind,cards,net,ev,vpip,pfr,showdown,rake,data,other_fees,hero_rake,hero_other_fees)
-        VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15) ON CONFLICT(id) DO NOTHING",
+    let stats = serde_json::to_string(&crate::stats::for_hand(hand)).map_err(|e| e.to_string())?;
+    conn.execute("INSERT INTO hands (id,played_at,currency,big_blind,cards,net,ev,vpip,pfr,showdown,rake,data,other_fees,hero_rake,hero_other_fees,stats)
+        VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16) ON CONFLICT(id) DO NOTHING",
         params![hand.id, hand.played_at, hand.currency, hand.big_blind, hand.hero_cards.join(" "), hand.net,
-            hand.ev, hand.vpip, hand.pfr, hand.showdown, hand.rake, json, hand.other_fees, hand.hero_rake, hand.hero_other_fees])
+            hand.ev, hand.vpip, hand.pfr, hand.showdown, hand.rake, json, hand.other_fees, hand.hero_rake, hand.hero_other_fees, stats])
         .map(|n| n == 1).map_err(|e| e.to_string())
 }
 
@@ -200,6 +238,7 @@ pub fn overview(conn: &Connection, filter: Filter) -> Result<Overview, String> {
         )
         .map_err(|e| e.to_string())?;
     let mut result = Overview {
+        hud: Default::default(),
         hands,
         net: 0,
         ev: Some(0.0),
@@ -223,7 +262,7 @@ pub fn overview(conn: &Connection, filter: Filter) -> Result<Overview, String> {
         stakes,
         points: vec![],
     };
-    let mut stmt = conn.prepare(&format!("SELECT played_at,net,ev,big_blind,vpip,pfr,showdown,hero_other_fees,hero_rake FROM hands WHERE {WHERE} ORDER BY played_at,id")).map_err(|e| e.to_string())?;
+    let mut stmt = conn.prepare(&format!("SELECT played_at,net,ev,big_blind,vpip,pfr,showdown,hero_other_fees,hero_rake,stats FROM hands WHERE {WHERE} ORDER BY played_at,id")).map_err(|e| e.to_string())?;
     let rows = stmt
         .query_map(
             params![
@@ -244,6 +283,7 @@ pub fn overview(conn: &Connection, filter: Filter) -> Result<Overview, String> {
                     r.get::<_, f64>(6)?,
                     r.get::<_, Option<i64>>(7)?,
                     r.get::<_, Option<i64>>(8)?,
+                    r.get::<_, String>(9)?,
                 ))
             },
         )
@@ -253,8 +293,11 @@ pub fn overview(conn: &Connection, filter: Filter) -> Result<Overview, String> {
     let stride = hands.div_ceil(1600).max(1);
     let mut previous_point: Option<Point> = None;
     for (i, row) in rows.enumerate() {
-        let (at, net, ev, bb, vpip, pfr, showdown, other_fees, hero_rake) =
+        let (at, net, ev, bb, vpip, pfr, showdown, other_fees, hero_rake, stats) =
             row.map_err(|e| e.to_string())?;
+        result.hud.merge(
+            &serde_json::from_str::<crate::stats::HudStats>(&stats).map_err(|e| e.to_string())?,
+        );
         let first_missing = result.ev.is_some() && ev.is_none();
         result.net += net;
         net_bb += net as f64 / bb as f64;

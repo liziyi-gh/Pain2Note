@@ -41,7 +41,11 @@
     if (
       overview.net !== 3870 ||
       overview.hands !== 5 ||
-      overview.evMissing !== 0
+      overview.evMissing !== 0 ||
+      overview.hud.wtsd.hits !== 3 ||
+      overview.hud.wtsd.opportunities !== 4 ||
+      overview.hud.streets[0].cbet.hits !== 1 ||
+      overview.hud.streets[0].cbet.opportunities !== 1
     )
       throw new Error(`Incorrect overview: ${JSON.stringify(overview)}`);
     (
@@ -66,6 +70,24 @@
         return close && !close.disabled && close;
       }, 'import finished')
     ).click();
+    document.querySelector('.nav-submenu button:last-child').click();
+    await waitFor(
+      () =>
+        document.querySelector('[aria-label="WTSD"] .hud-rate')?.textContent ===
+        '75.0%',
+      'native HUD showdown rate',
+    );
+    await waitFor(
+      () =>
+        document.querySelector('.hud-streets tbody tr:first-child td .hud-rate')
+          ?.textContent === '100.0%',
+      'native HUD flop continuation bet',
+    );
+    button('盈利概览').click();
+    await waitFor(
+      () => document.querySelectorAll('tbody tr').length === 5,
+      'restore hand rows',
+    );
     document.querySelector('[aria-label="查看 RCDEMO005"]').click();
     await waitFor(
       () => document.querySelector('.hand-drawer'),
@@ -92,6 +114,8 @@
           'EV',
           'duplicate import',
           'overview',
+          'HUD opportunity counts',
+          'HUD submenu',
           'hand detail',
         ],
       },

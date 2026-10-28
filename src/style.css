@@ -179,6 +179,144 @@ nav button.active svg {
   padding: 3px 6px;
   border-radius: 4px;
 }
+.nav-submenu {
+  display: grid;
+  gap: 3px;
+  margin: -1px 0 6px 23px;
+  padding-left: 13px;
+  border-left: 1px solid #34414d;
+}
+.nav-submenu button {
+  padding: 9px 11px;
+  font-size: 11px;
+  gap: 7px;
+}
+.nav-hud {
+  font-size: 8px;
+  letter-spacing: 0.7px;
+  margin-left: auto;
+  color: #7da99e;
+}
+.hud-filter-search {
+  margin: 0 0 18px auto;
+  max-width: 270px;
+}
+.hud-summary,
+.hud-summary > div {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+.hud-summary {
+  justify-content: space-between;
+  margin-bottom: 18px;
+  color: #768498;
+  font-size: 11px;
+}
+.hud-summary > div {
+  color: #248c77;
+  font-weight: 600;
+  font-size: 13px;
+}
+.hud-panel {
+  margin-bottom: 20px;
+}
+.hud-section-label {
+  font-size: 9px;
+  font-weight: 400;
+  letter-spacing: 1px;
+  color: #929eaf;
+}
+.hud-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1px;
+  background: #e8edf2;
+  border-top: 1px solid #e8edf2;
+}
+.hud-card {
+  background: white;
+  padding: 20px 23px;
+}
+.hud-card-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: #344054;
+  font-size: 12px;
+  font-weight: 600;
+}
+.hud-card-heading > span + span {
+  color: #8995a5;
+  font-weight: 400;
+  font-size: 10px;
+}
+.hud-rate {
+  display: block;
+  font-variant-numeric: tabular-nums;
+  font-size: 29px;
+  font-weight: 600;
+  letter-spacing: -0.8px;
+  color: #2e655b;
+  margin-top: 15px;
+}
+.hud-sample {
+  display: block;
+  color: #8592a4;
+  font-size: 10px;
+  margin-top: 7px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 400;
+}
+.hud-card p {
+  font-size: 10px;
+  color: #8793a4;
+  line-height: 1.8;
+  margin-top: 12px;
+}
+.hud-streets {
+  min-width: 650px;
+}
+.hud-streets th {
+  text-align: left;
+}
+.hud-streets th small {
+  display: block;
+  margin-top: 7px;
+  color: #8b97a7;
+  font-weight: 400;
+  font-size: 10px;
+}
+.hud-streets .hud-rate {
+  margin: 0;
+  font-size: 21px;
+}
+.hud-method {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 2px 4px 28px;
+  color: #8793a4;
+}
+.hud-method h3 {
+  color: #66768a;
+  font-size: 11px;
+  margin-bottom: 9px;
+}
+.hud-method p {
+  font-size: 10px;
+  line-height: 1.9;
+  margin-top: 5px;
+}
+@media (max-width: 1100px) {
+  .hud-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .hud-card {
+    padding: 18px;
+  }
+}
 .sidebar-section {
   margin: 34px 11px 0;
 }

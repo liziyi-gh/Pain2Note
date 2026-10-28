@@ -6,6 +6,7 @@ pub mod model;
 pub mod parser;
 pub mod preflop;
 pub mod rake;
+pub mod stats;
 
 use model::{Filter, Hand, HandRow, ImportReport, Overview};
 use std::{

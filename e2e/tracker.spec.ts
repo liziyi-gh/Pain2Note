@@ -1,5 +1,89 @@
 import { test, expect } from '@playwright/test';
 
+test('HUD submenu shows opportunity-based stats and follows shared filters', async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  await page.goto('/');
+  const menu = page.getByRole('group', { name: '数据总览二级菜单' });
+  await menu.getByRole('button', { name: '技术统计' }).click();
+  const preflop = page.getByRole('region', { name: '翻前统计' });
+  await expect(
+    preflop.getByRole('article', { name: '3B', exact: true }),
+  ).toContainText('—');
+  await expect(
+    page.getByText('当前没有符合条件的手牌。', { exact: false }),
+  ).toBeVisible();
+  await menu.getByRole('button', { name: '盈利概览' }).click();
+  await page.getByRole('button', { name: '先看看演示' }).click();
+  await menu.getByRole('button', { name: '技术统计' }).click();
+  await expect(
+    page.getByRole('heading', { name: '技术统计', exact: true }),
+  ).toBeVisible();
+  await expect(menu.getByRole('button', { name: '技术统计' })).toHaveAttribute(
+    'aria-current',
+    'page',
+  );
+  await expect(
+    preflop.getByRole('article', { name: '3B', exact: true }),
+  ).toContainText('0.0%');
+  await expect(
+    preflop.getByRole('article', { name: '3B', exact: true }),
+  ).toContainText('0 / 1 次');
+  await expect(
+    preflop.getByRole('article', { name: '4B', exact: true }),
+  ).toContainText('—');
+  await expect(
+    page.getByRole('article', { name: 'WTSD', exact: true }),
+  ).toContainText('75.0%');
+  await expect(
+    page.getByRole('article', { name: 'WTSD', exact: true }),
+  ).toContainText('3 / 4 次');
+  await expect(
+    page.getByRole('article', { name: 'AF', exact: true }),
+  ).toContainText('1.00');
+  const flop = page.getByRole('row', { name: 'Flop · 翻牌' });
+  await expect(flop).toContainText('4 手');
+  await expect(flop.locator('td').first()).toContainText('100.0%');
+  await expect(page.getByRole('row', { name: 'Turn · 转牌' })).toContainText(
+    '3 手',
+  );
+  for (const width of [1024, 1440]) {
+    await page.setViewportSize({ width, height: 1040 });
+    await expect(flop).toBeVisible();
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= window.innerWidth,
+      ),
+    ).toBe(true);
+  }
+  await page.screenshot({ path: 'artifacts/ui-stats.png', fullPage: true });
+  await page
+    .getByRole('textbox', { name: '搜索手牌 ID 或底牌' })
+    .fill('RCDEMO002');
+  await expect(
+    page.getByRole('article', { name: 'WTSD', exact: true }),
+  ).toContainText('0.0%');
+  await expect(
+    page.getByRole('article', { name: 'AF', exact: true }),
+  ).toContainText('∞');
+  await expect(flop).toContainText('1 手');
+  await menu.getByRole('button', { name: '盈利概览' }).click();
+  await expect(page.locator('tbody tr')).toHaveCount(1);
+  await menu.getByRole('button', { name: '技术统计' }).click();
+  await page.getByRole('button', { name: '重置筛选' }).click();
+  await expect(
+    page.getByRole('article', { name: 'WTSD', exact: true }),
+  ).toContainText('75.0%');
+  await page.getByLabel('开始日期').fill('2026-10-21');
+  await expect(
+    page.getByRole('article', { name: 'WTSD', exact: true }),
+  ).toContainText('—');
+  await expect(flop).toContainText('0 手');
+  expect(errors).toEqual([]);
+});
+
 test('chart hover follows rendered SVG points across aspect ratios and filters', async ({
   page,
 }) => {
