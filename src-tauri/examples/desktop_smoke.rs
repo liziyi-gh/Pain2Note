@@ -4,7 +4,6 @@ use std::time::Duration;
 use tauri::Listener;
 
 fn main() {
-    pain2note_lib::import_worker::run_if_requested();
     let directory = tempfile::tempdir().expect("temporary smoke database");
     let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../fixtures/gg-six-max.txt")

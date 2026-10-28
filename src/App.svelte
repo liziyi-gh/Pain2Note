@@ -921,8 +921,8 @@
       {#if importing}<div class="import-progress">
           <LoaderCircle size={18} class="spin" /><span
             >{progress
-              ? `${progress.workers || 0} 个解析进程 · 已读取 ${progress.files} 个文件，暂存 ${progress.imported} 手，跳过 ${progress.duplicates} 手重复`
-              : '准备多进程导入…首次遇到翻前全下局面时将生成精确查表项。'}</span
+              ? `${progress.workers || 0} 个解析线程 · 已读取 ${progress.files} 个文件，暂存 ${progress.imported} 手，跳过 ${progress.duplicates} 手重复`
+              : '准备多线程导入…首次遇到翻前全下局面时将生成精确查表项。'}</span
           >
         </div>{/if}{#if report}<div class="report-summary" role="status">
           <CheckCheck size={21} />

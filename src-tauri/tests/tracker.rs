@@ -19,14 +19,7 @@ fn import_paths(
     hero: &str,
     progress: impl Fn(&pain2note_lib::model::ImportReport),
 ) -> Result<pain2note_lib::model::ImportReport, String> {
-    importer::import_paths_with_workers(
-        conn,
-        paths,
-        hero,
-        progress,
-        std::path::PathBuf::from(env!("CARGO_BIN_EXE_pain2note")),
-        2,
-    )
+    importer::import_paths_with_workers(conn, paths, hero, progress, 2)
 }
 
 #[test]
@@ -120,7 +113,7 @@ fn cash_drop_increases_preflop_and_multi_runout_main_pot_ev() {
 fn parallel_workers_share_equity_cache_and_retry_invalid_duplicate_ids() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("parallel.txt");
-    // Two processes encounter the same uncached equity key concurrently.
+    // Two threads encounter the same uncached equity key concurrently.
     let second = hand(0).replace("RCDEMO001", "PARALLEL_SECOND");
     let broken = hand(1).replace("Total pot $6.50", "Total pot $7.50");
     std::fs::write(
@@ -147,23 +140,12 @@ fn parallel_workers_share_equity_cache_and_retry_invalid_duplicate_ids() {
 }
 
 #[test]
-fn worker_or_database_failure_rolls_back_the_entire_batch() {
+fn database_failure_rolls_back_the_entire_batch() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("hands.txt");
     std::fs::write(&path, SAMPLE).unwrap();
     let paths = [path.to_string_lossy().into_owned()];
     let mut conn = connection();
-    let result = importer::import_paths_with_workers(
-        &mut conn,
-        &paths,
-        "Hero",
-        |_| {},
-        dir.path().join("missing-worker"),
-        2,
-    );
-    assert!(result.unwrap_err().contains("无法启动导入子进程"));
-    assert_eq!(db::overview(&conn, Filter::default()).unwrap().hands, 0);
-    assert!(db::history(&conn).unwrap().is_empty());
     conn.execute_batch("CREATE TRIGGER fail_hand BEFORE INSERT ON hands WHEN NEW.id='HDDEMO003' BEGIN SELECT RAISE(ABORT, 'test write failure'); END;").unwrap();
     let result = import_paths(&mut conn, &paths, "Hero", |_| {});
     assert!(result.unwrap_err().contains("test write failure"));

@@ -1,138 +1,79 @@
-//! Bounded, persistent OS processes. Only the parent writes hands and reports.
+//! Bounded, persistent worker threads. Only the importing thread writes hands and reports.
 use crate::{db, model::Hand, parser};
 use rusqlite::{params, Connection};
-use serde::{Deserialize, Serialize};
 use std::{
-    io::{BufRead, BufReader, BufWriter, Write},
-    path::{Path, PathBuf},
-    process::{Child, ChildStdin, ChildStdout, Command, Stdio},
+    sync::mpsc::{self, Receiver, Sender},
+    thread::{self, JoinHandle},
 };
 
-const FLAG: &str = "--pain2note-import-worker";
-
-#[derive(Serialize, Deserialize)]
 struct Request {
     hero: String,
     raw: String,
 }
 
-#[derive(Serialize, Deserialize)]
-struct Response {
-    pid: u32,
-    result: Result<Hand, String>,
-}
-
-/// Called before initializing Tauri, so workers never create windows.
-pub fn run_if_requested() {
-    let mut args = std::env::args_os().skip(1);
-    if args.next().as_deref() != Some(std::ffi::OsStr::new(FLAG)) {
-        return;
-    }
-    let result = args
-        .next()
-        .ok_or_else(|| "缺少 worker 权益缓存路径".to_string())
-        .and_then(|path| serve(Path::new(&path)));
-    if let Err(error) = result {
-        eprintln!("导入子进程失败：{error}");
-        std::process::exit(1);
-    }
-    std::process::exit(0);
-}
-
-fn serve(path: &Path) -> Result<(), String> {
-    let conn = db::open(path)?;
-    let input = std::io::stdin();
-    let mut output = BufWriter::new(std::io::stdout().lock());
-    for line in input.lock().lines() {
-        let request: Request =
-            serde_json::from_str(&line.map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
-        let response = Response {
-            pid: std::process::id(),
-            result: parser::parse(&request.raw, &request.hero, &conn),
-        };
-        serde_json::to_writer(&mut output, &response).map_err(|e| e.to_string())?;
-        output.write_all(b"\n").map_err(|e| e.to_string())?;
-        output.flush().map_err(|e| e.to_string())?;
-    }
-    Ok(())
-}
+type ParseResult = Result<Hand, String>;
 
 struct Worker {
-    child: Child,
-    input: BufWriter<ChildStdin>,
-    output: BufReader<ChildStdout>,
+    input: Option<Sender<Request>>,
+    output: Receiver<ParseResult>,
+    thread: Option<JoinHandle<()>>,
 }
 
 impl Worker {
-    fn start(executable: &Path, cache: &Path) -> Result<Self, String> {
-        let mut command = Command::new(executable);
-        command
-            .arg(FLAG)
-            .arg(cache)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::inherit());
-        #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt;
-            command.creation_flags(0x08000000); // CREATE_NO_WINDOW
-        }
-        let mut child = command
-            .spawn()
-            .map_err(|e| format!("无法启动导入子进程：{e}"))?;
-        let input = BufWriter::new(child.stdin.take().ok_or("无法连接 worker stdin")?);
-        let output = BufReader::new(child.stdout.take().ok_or("无法连接 worker stdout")?);
+    fn start(cache: &std::path::Path) -> Result<Self, String> {
+        // Open before spawning so initialization errors fail the entire import.
+        let conn = db::open(cache)?;
+        let (input, requests) = mpsc::channel::<Request>();
+        let (responses, output) = mpsc::channel();
+        let thread = thread::Builder::new()
+            .name("hand-import-worker".into())
+            .spawn(move || {
+                while let Ok(request) = requests.recv() {
+                    if responses
+                        .send(parser::parse(&request.raw, &request.hero, &conn))
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+            })
+            .map_err(|e| format!("无法启动导入线程：{e}"))?;
         Ok(Self {
-            child,
-            input,
+            input: Some(input),
             output,
+            thread: Some(thread),
         })
     }
 
-    fn send(&mut self, hero: &str, raw: &str) -> Result<(), String> {
-        serde_json::to_writer(
-            &mut self.input,
-            &Request {
+    fn send(&self, hero: &str, raw: &str) -> Result<(), String> {
+        self.input
+            .as_ref()
+            .ok_or("导入线程已关闭")?
+            .send(Request {
                 hero: hero.into(),
                 raw: raw.into(),
-            },
-        )
-        .map_err(|e| format!("无法发送 worker 任务：{e}"))?;
-        self.input
-            .write_all(b"\n")
-            .and_then(|()| self.input.flush())
-            .map_err(|e| format!("无法发送 worker 任务：{e}"))
+            })
+            .map_err(|_| "导入线程意外退出，本批事务将回滚".into())
     }
 
-    fn receive(&mut self) -> Result<Result<Hand, String>, String> {
-        let mut line = String::new();
-        if self
-            .output
-            .read_line(&mut line)
-            .map_err(|e| e.to_string())?
-            == 0
-        {
-            return Err("导入子进程意外退出，本批事务将回滚".into());
-        }
-        let response: Response =
-            serde_json::from_str(&line).map_err(|e| format!("无效 worker 响应：{e}"))?;
-        if response.pid != self.child.id() {
-            return Err("worker 进程身份不匹配".into());
-        }
-        Ok(response.result)
+    fn receive(&self) -> Result<ParseResult, String> {
+        self.output
+            .recv()
+            .map_err(|_| "导入线程意外退出，本批事务将回滚".into())
     }
 }
 
 impl Drop for Worker {
     fn drop(&mut self) {
-        // Also reap children on errors and transaction rollback.
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        // Close the queue and join before the temporary cache is removed.
+        self.input.take();
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
     }
 }
 
 pub(crate) struct Pool {
-    executable: PathBuf,
     pub capacity: usize,
     workers: Vec<Worker>,
     // Drop the connection before deleting the directory (also works on Windows).
@@ -160,9 +101,8 @@ fn copy_cache(source: &Connection, target: &Connection) -> Result<(), String> {
 }
 
 impl Pool {
-    pub fn new(executable: PathBuf, capacity: usize) -> Self {
+    pub fn new(capacity: usize) -> Self {
         Self {
-            executable,
             capacity: capacity.clamp(1, 8),
             workers: vec![],
             cache: None,
@@ -178,7 +118,7 @@ impl Pool {
         conn: &Connection,
         hero: &str,
         raw: &[&str],
-    ) -> Result<Vec<Result<Hand, String>>, String> {
+    ) -> Result<Vec<ParseResult>, String> {
         if self.cache.is_none() {
             let directory = tempfile::tempdir().map_err(|e| e.to_string())?;
             let mut cache = db::open(&directory.path().join("equity.sqlite3"))?;
@@ -189,13 +129,13 @@ impl Pool {
         }
         let path = self.cache.as_ref().unwrap().1.path().join("equity.sqlite3");
         while self.workers.len() < raw.len().min(self.capacity) {
-            self.workers.push(Worker::start(&self.executable, &path)?);
+            self.workers.push(Worker::start(&path)?);
         }
-        for (worker, raw) in self.workers.iter_mut().zip(raw) {
+        for (worker, raw) in self.workers.iter().zip(raw) {
             worker.send(hero, raw)?;
         }
         self.workers
-            .iter_mut()
+            .iter()
             .take(raw.len())
             .map(Worker::receive)
             .collect()
@@ -212,7 +152,27 @@ impl Pool {
 
 impl Drop for Pool {
     fn drop(&mut self) {
-        // Close processes before the temporary cache directory is removed.
         self.workers.clear();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unexpected_worker_exit_is_reported() {
+        let (input, _requests) = mpsc::channel();
+        let (responses, output) = mpsc::channel();
+        let thread = thread::spawn(move || {
+            drop(responses);
+            panic!("simulated worker failure");
+        });
+        let worker = Worker {
+            input: Some(input),
+            output,
+            thread: Some(thread),
+        };
+        assert!(worker.receive().unwrap_err().contains("导入线程意外退出"));
     }
 }

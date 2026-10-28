@@ -4,7 +4,7 @@ use rusqlite::Connection;
 use std::{
     fs::File,
     io::{Cursor, Read},
-    path::{Path, PathBuf},
+    path::Path,
     sync::LazyLock,
 };
 use walkdir::WalkDir;
@@ -253,20 +253,18 @@ pub fn import_paths(
     hero: &str,
     progress: impl Fn(&ImportReport),
 ) -> Result<ImportReport, String> {
-    let executable = std::env::current_exe().map_err(|e| e.to_string())?;
     let workers = std::thread::available_parallelism()
         .map_or(1, usize::from)
         .min(8);
-    import_paths_with_workers(conn, paths, hero, progress, executable, workers)
+    import_paths_with_workers(conn, paths, hero, progress, workers)
 }
 
-/// Alternate executable must implement the import-worker protocol (used by CLI/tests).
+/// Import with a specified maximum number of worker threads.
 pub fn import_paths_with_workers(
     conn: &mut Connection,
     paths: &[String],
     hero: &str,
     progress: impl Fn(&ImportReport),
-    executable: PathBuf,
     workers: usize,
 ) -> Result<ImportReport, String> {
     if hero.trim().is_empty() {
@@ -283,7 +281,7 @@ pub fn import_paths_with_workers(
         bytes: 0,
         entries: 0,
         progress,
-        pool: Pool::new(executable, workers),
+        pool: Pool::new(workers),
         pending: vec![],
         fatal: None,
     };

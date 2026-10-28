@@ -37,7 +37,7 @@ macOS 构建产物：[Pain2Note.app](src-tauri/target/release/bundle/macos/Pain2
 - 现金掉落单独保留，按 `玩家投入 + Cash Drop = 派彩 + Rake + 其他扣费` 对账；实际盈利仍为 Hero 派彩减投入，不额外加一次掉落金额。全下 EV 将平台资金计入主池，扣费按包含掉落的底池金额比例分摊；支持短筹码边池和多次发牌。
 - 实际盈利、All-in EV、bb/100、手牌列表、手牌详情、日期/币种/级别/ID/具体底牌筛选。
 - 曲线可切换货币 / BB、开关 EV、悬停查看。CSV 导出的是**当前曲线采样点**，大样本约 1,600 点，并非完整手牌导出。
-- 导入进度、逐项错误报告、最近 30 批导入历史；后台任务使用持久子进程解析和计算 EV，按可用 CPU 数启动，最多 8 个进程。单个大文件也会逐手分发，进度显示实际进程数。主进程统一写入 SQLite 并提交事务；worker 共享临时权益缓存，继承已有缓存，新权益随整批事务保存。子进程或数据库写入失败时整批回滚并清理进程；损坏牌谱仍逐手报告，其他有效手牌可保存。
+- 导入进度、逐项错误报告、最近 30 批导入历史；后台任务使用持久线程解析和计算 EV，按可用 CPU 数启动，最多 8 个线程。单个大文件也会逐手分发，进度显示实际线程数。导入线程统一写入 SQLite 并提交事务；worker 共享临时权益缓存，继承已有缓存，新权益随整批事务保存。工作线程或数据库写入失败时整批回滚并清理线程；损坏牌谱仍逐手报告，其他有效手牌可保存。
 
 默认 Hero 名称为 `Hero`，可在导入弹窗或设置中修改。日期保持原始牌谱时间，不擅自推断时区。不同币种分别查看，不进行隐式汇率换算。
 
@@ -85,7 +85,7 @@ macOS 数据库默认位于 `~/Library/Application Support/com.pain2note.tracker
 - [界面](src/App.svelte) / [曲线](src/components/ProfitChart.svelte)
 - [GG 解析器](src-tauri/src/parser.rs)
 - [导入与安全解压](src-tauri/src/importer.rs)
-- [导入子进程与权益缓存](src-tauri/src/import_worker.rs)
+- [导入工作线程与权益缓存](src-tauri/src/import_worker.rs)
 - [SQLite 查询与汇总](src-tauri/src/db.rs)
 - [翻前权益表](src-tauri/src/preflop.rs) / [牌型与底池 EV](src-tauri/src/equity.rs)
 - [离线制表工具](src-tauri/examples/precompute_equity.rs)
